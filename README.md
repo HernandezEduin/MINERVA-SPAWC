@@ -1,6 +1,6 @@
-# MINERVA-SPAWC
+# MINERVA-InfoCost
 
-Official implementation of the SPAWC 2026 paper:
+Official implementation of the paper:
 
 **"The Information Cost of Multi-Hop Reasoning: Distributed Graph Navigation under Communication Constraints"**
 
@@ -35,13 +35,13 @@ Extract the archive in the repository root so the directories appear at the top 
 Use a dataset config to run evaluation and policy-entropy analysis:
 
 ```bash
-bash run_spawc.sh --config_yaml configs/<dataset>.yaml
+bash run_infocost.sh configs/<dataset>.yaml
 ```
 
 Example:
 
 ```bash
-bash run_spawc.sh --config_yaml configs/kinshiphinton.yaml
+bash run_infocost.sh configs/kinshiphinton.yaml
 ```
 
 Available configs:
@@ -60,10 +60,10 @@ Outputs are written under `./saved_models/<dataset>/<run_name>/`:
 
 The repository is organized as follows:
 ```
-minerva_spawc/
+minerva_infocost/
 ├── .cache/                 # Cached files for processed datasets
 ├── code/
-│   ├── evaluation_spawc.py # Evaluation entrypoint for SPAWC experiments
+│   ├── evaluation_infocost.py # Evaluation entrypoint for InfoCost experiments
 │   └── policy_entropy/
 │       ├── eval.py         # Policy-entropy evaluation pipeline and summaries
 │       ├── metrics.py      # Core entropy/surprisal and identifier-bit utilities
@@ -72,7 +72,7 @@ minerva_spawc/
 ├── configs/                # YAML config files for different datasets
 ├── datasets/               # Datasets for evaluation (preprocessed and ready to use)
 ├── minerva/                # MINERVA codebase (submodule)
-├── run_spawc.sh            # Convenience script to launch configured runs
+├── run_infocost.sh            # Convenience script to launch configured runs
 └── saved_models/            # Pretrained models and evaluation outputs
     ├── kinshiphinton/      # Outputs for the Kinship-Hinton dataset
     ├── metaqa/             # Outputs for the MetaQA dataset
@@ -85,10 +85,9 @@ minerva_spawc/
 If you use this code for your research, please cite our paper:
 
 ```
-@inproceedings{minerva_spawc_2026,
+@inproceedings{minerva_infocost_2026,
   title={The Information Cost of Multi-Hop Reasoning: Distributed Graph Navigation under Communication Constraints},
   author={Hernandez, Eduin E and Garcia, Luis F, and Askar, Nurassyl, and Rini, Stefano},
-  booktitle={2026 IEEE 27th International Workshop on Signal Processing and Artificial Intelligence in Wireless Communications},
   year={2026},
-  url={https://github.com/HalcyonSolutions/MINERVA-SPAWC}
+  url={https://github.com/HalcyonSolutions/MINERVA-InfoCost}
 }
