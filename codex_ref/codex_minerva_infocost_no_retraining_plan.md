@@ -4,6 +4,7 @@
 **Default branch when inspected:** `master`  
 **MINERVA submodule commit when inspected:** `9bf1ae998d14471c3f7c31f70969d0bbf9873329`  
 **Prepared:** 2026-08-27  
+**Updated:** 2026-08-28 after the first full four-dataset rate sweeps  
 **Scope:** Evaluation-only changes. **Do not retrain MINERVA. Do not modify pretrained checkpoints.**
 
 ---
@@ -27,6 +28,8 @@ Using the **existing pretrained checkpoints**, add evaluation functionality that
 > **How does restricting the amount of action information communicated at each hop affect reasoning accuracy and path fidelity?**
 
 The primary deliverable is a **rate/budget vs. task-performance evaluation** for the current pretrained policies.
+
+> **Post-P0 status:** The first full sweeps did **not** show a meaningful Hits@1-vs-rate trade-off. Greedy/K=1 preserved unrestricted Hits@1 on all four evaluated settings. The next implementation task is therefore to separate single-trajectory utility/cost from MINERVA's 100-rollout candidate-ranking utility/cost, add a matched NumPy unrestricted sampler, and test action-cap sensitivity. See Sections 29–32.
 
 ---
 
@@ -1186,7 +1189,7 @@ If repository behavior conflicts with this brief, preserve current semantics and
 
 ---
 
-## 29. Implementation status — 2026-08-27
+## 29. Implementation status — updated 2026-08-28
 
 P0 is implemented as an additive, evaluation-only path. No model was retrained, no checkpoint was modified, and no existing YAML configuration, `code/evaluation_infocost.py`, manuscript file, or MINERVA submodule source was changed. The submodule remains at `9bf1ae998d14471c3f7c31f70969d0bbf9873329`; its two manuscript deletions were present before this work.
 
@@ -1212,15 +1215,488 @@ The task-agnostic distribution is a smoothed graph-structural relation prior bui
 
 - Existing Kinship InfoCost evaluation ran before and after implementation with exactly identical summary statistics.
 - The new unrestricted `tf_policy` entropy statistics agree with the existing evaluator within `1e-6`.
-- All 15 pure NumPy unit tests pass in the `minerva_tf2` conda environment.
-- Python compilation, shell syntax checks, and `git diff --check` pass.
+- All 15 pure NumPy unit tests passed in the `minerva_tf2` conda environment at the end of P0.
+- Python compilation, shell syntax checks, and `git diff --check` passed.
 - Greedy and Top-K with `K=1` are identical and report zero execution payload.
 - Checkpoint file sizes and modification times are unchanged.
-- A full Kinship sweep completed for `K=1,2,4,8,16,32,64,128` plus unrestricted.
-- MQuAKE-ST single, MQuAKE-ST multi, and MetaQA completed bounded one-batch smoke evaluations and produced the common CSV/JSON/plot format. Full-dataset sweeps for those three configurations have not yet been run.
+- Full-dataset sweeps completed for:
+  - `configs/kinshiphinton.yaml`
+  - `configs/metaqa.yaml`
+  - `configs/mquake_st_single.yaml`
+  - `configs/mquake_st_multi.yaml`
+- All current configs use `test_rollouts: 100`; this is confirmed both in the YAMLs and in `rate_eval.py`, which calls `change_test_rollouts(trainer.test_rollouts)` and constructs every evaluation episode with `trainer.test_rollouts`.
 
-### First full-sweep observation
+### Full-sweep results available so far
 
-For Kinship with rate seed 42, greedy/K=1 preserved unrestricted Hits@1 (`0.960396`) but had lower MRR. Top-K with K=2 and K=4 produced Hits@1 `0.970297` in this run. This is a single-seed observation and may reflect inference regularization; it is not treated as an established improvement.
+All values below are from evaluation seed 42, 100 rollouts/question, `use_beam=False`, and MINERVA-compatible `pool="max"` ranking.
 
-Top-K sampling uses seeded NumPy PCG64, while unrestricted `tf_policy` uses the upstream TensorFlow categorical sampler. Equal distributions can therefore produce different finite-sample results across these backends. The output metadata records this comparability caveat explicitly.
+| Dataset | Greedy Hits@1 | Unrestricted Hits@1 | Greedy MRR | Unrestricted MRR | Greedy path metric | Unrestricted path metric | Unrestricted policy entropy (bits/hop) | Truncated visited states |
+|---|---:|---:|---:|---:|---|---|---:|---:|
+| Kinship | 0.960396 | 0.960396 | 0.960396 | 0.976073 | PED 1.861386 / RED 1.6436 | PED 1.990099 / RED 1.7129 | 1.0746 | 0.00% |
+| MetaQA | 0.897910 | 0.897757 | 0.897910 | 0.930447 | unavailable | unavailable | 0.4540 | 1.92% |
+| MQuAKE-ST Single | 0.8863 | 0.8863 | 0.8863 | 0.8889 | PED 0.9215 / RED 0.6602 | PED 0.9215 / RED 0.6602 | 0.0066 | 5.15% |
+| MQuAKE-ST Multi | 0.8563 | 0.8563 | 0.8563 | 0.8602 | RED 1.2023 | RED 1.2023 | 0.0110 | 18.39% |
+
+MQuAKE-ST Multi does not have a compatible entity-path PED under the current data representation; keep RED separate rather than relabeling it PED.
+
+### MetaQA Top-K detail
+
+MetaQA has 39,093 questions and 100 rollouts/question.
+
+| Mode | Mean fixed local-rank bits/hop | Hits@1 | MRR |
+|---|---:|---:|---:|
+| Greedy / K=1 | 0.000 | 0.897910 | 0.897910 |
+| K=2 | 1.000 | 0.897782 | 0.928080 |
+| K=4 | 1.896 | 0.897859 | 0.929972 |
+| K=8 | 2.683 | 0.897757 | 0.930104 |
+| K=16 | 3.210 | 0.897757 | 0.930133 |
+| K=32 | 3.404 | 0.897731 | 0.930122 |
+| K=64 | 3.469 | 0.897782 | 0.930141 |
+| K=128 | 3.498 | 0.897757 | 0.930128 |
+| Unrestricted TF policy | 3.519 | 0.897757 | 0.930447 |
+
+MetaQA's unrestricted graph/action diagnostics:
+
+```text
+mean policy entropy:              0.45395 bits/hop
+mean task-agnostic surprisal:     3.50262 bits/hop
+policy-vs-task-agnostic KL:       3.04868 bits/hop
+max raw valid actions:            4305
+overall visited-state truncation: 1.9165%
+hop-2 truncation:                 ~5.70%
+```
+
+### Current scientific observation
+
+Do **not** force a monotonic rate–accuracy interpretation.
+
+The observed result is:
+
+1. Greedy/K=1 preserves unrestricted Hits@1 on all four completed settings under the present 100-rollout MINERVA evaluation.
+2. MQuAKE-ST Single/Multi are effectively deterministic under the pretrained policy, so increasing Top-K support produces almost no task-metric change.
+3. Kinship has small non-monotonic K=2/K=4 changes that are single-seed observations and should not be interpreted as established improvements.
+4. MetaQA has essentially flat Hits@1 but a large difference between greedy and stochastic MRR.
+5. The task-agnostic structural prior is much less predictive than the task-conditioned policy, especially on MQuAKE and MetaQA.
+6. Action-cap truncation is a real limitation, especially MQuAKE-ST Multi at 18.39% of visited states.
+
+---
+
+## 30. Important correction — 100-rollout ranking utility is not a per-rollout communication task
+
+The current implementation is correctly using 100 evaluation rollouts/question.
+
+Upstream MINERVA Hits@1/MRR under `pool="max"` are **candidate-ranking metrics built from the set of sampled rollouts**:
+
+1. sample `R=test_rollouts` trajectories;
+2. score each trajectory by cumulative execution-policy log probability;
+3. rank those trajectories;
+4. collapse duplicate incorrect terminal entities;
+5. compute the rank of the first correct terminal entity.
+
+Therefore the current MetaQA MRR is valid as **MINERVA 100-rollout candidate-ranking MRR**. It is not conventional full-KG entity-ranking MRR.
+
+However, it is misleading to compare that ensemble MRR directly against only:
+
+```text
+1 bit/hop
+```
+
+when `K=2`, because `1 bit/hop` is a **per-rollout action payload**.
+
+For a fixed 3-hop horizon and 100 independently communicated rollouts, the worst-case hard local-rank action payload for K=2 can be approximately:
+
+```text
+100 rollouts * 3 hops * 1 bit = 300 action bits/question
+```
+
+subject to the actual per-state support size.
+
+### Consequence
+
+The next evaluator revision must explicitly separate:
+
+```text
+A. single-trajectory execution
+   utility: terminal success / path fidelity
+   communication: bits for one executed path
+
+B. multi-rollout candidate ranking
+   utility: MINERVA Hits@1 / MRR
+   communication: total bits required for the complete rollout ensemble
+```
+
+Do not describe an MRR improvement as being obtained for only `B bits/hop` without also reporting the rollout count and the corresponding total per-question ensemble communication.
+
+### Greedy special case
+
+With deterministic greedy action selection and identical initial state/task, all repeated rollout slots for one question follow the same trajectory.
+
+Therefore for greedy:
+
+```text
+MRR == Hits@1
+```
+
+under the current MAX-pool ranking semantics.
+
+This is expected, not an evaluator bug.
+
+---
+
+## 31. Immediate follow-up implementation plan
+
+This is the next task for Codex. Keep it evaluation-only and additive.
+
+### Priority 1 — add an explicit evaluation-rollout override
+
+Add a rate-only CLI argument such as:
+
+```text
+--rate_test_rollouts
+```
+
+or:
+
+```text
+--rate_eval_rollouts
+```
+
+Requirements:
+
+1. default `None` means preserve the YAML `test_rollouts`;
+2. consume it in the custom pre-parser before upstream `read_options()`;
+3. do not modify existing YAML files;
+4. when set, apply it before constructing `TrainerNLQ`;
+5. save both:
+   - configured/YAML rollout count;
+   - effective evaluation rollout count;
+6. preserve current behavior when omitted.
+
+This is needed to run:
+
+```text
+R=1
+```
+
+as a true single-trajectory protocol without changing the checkpoint.
+
+#### Single-trajectory outputs
+
+For `R=1`, report at minimum:
+
+```text
+single_rollout_success_rate
+hits_at_1                  # should numerically equal success under one candidate
+PED / RED where available
+mean_path_fixed_rank_bits
+mean_path_surprisal_bits
+mean_path_shannon_code_bits
+```
+
+Do not make MRR a central single-trajectory metric; with one candidate it collapses to the same binary outcome as Hits@1.
+
+### Priority 2 — add total per-question communication for multi-rollout evaluation
+
+The current fields average over rollout/hop positions. Keep them for diagnostics.
+
+Also compute **per-question total communication across all rollouts**.
+
+Given a tensor:
+
+```text
+cost_bits shape = [B, R, T]
+```
+
+compute:
+
+```text
+question_total_cost_bits[b] = sum_{r=1..R} sum_{t=1..T} cost_bits[b,r,t]
+```
+
+Add summary fields such as:
+
+```text
+mean_question_fixed_rank_bits
+mean_question_surprisal_bits
+mean_question_shannon_code_bits
+mean_question_entropy_sum_bits
+```
+
+If task-agnostic fields are available, also add:
+
+```text
+mean_question_task_agnostic_surprisal_bits
+mean_question_task_agnostic_shannon_bits
+```
+
+These are ensemble costs for the currently sampled rollout set.
+
+Do **not** replace the existing per-hop/per-rollout means. Save both.
+
+Metadata should state:
+
+```text
+For R>1, MINERVA Hits@1/MRR are rollout-ensemble metrics.
+mean_question_* fields sum communication across all R rollout trajectories.
+```
+
+#### Plotting rule
+
+For the standard `R=100` MINERVA evaluation:
+
+- if plotting MRR against communication, use a total per-question ensemble cost on the x-axis;
+- do not plot MRR against only per-rollout `mean_fixed_budget_bits` without a clear secondary normalization label.
+
+For the `R=1` evaluation:
+
+- plot single-rollout success / path metric against per-path communication.
+
+### Priority 3 — add a NumPy unrestricted-policy mode
+
+Current stochastic comparison has:
+
+```text
+Top-K:       NumPy PCG64
+unrestricted: TensorFlow categorical
+```
+
+This introduces a finite-sample backend mismatch.
+
+Add a mode such as:
+
+```text
+action_mode = "numpy_policy"
+```
+
+or:
+
+```text
+action_mode = "unrestricted_numpy"
+```
+
+Behavior:
+
+1. fetch the same original `trainer.test_logits`;
+2. use the complete valid action support;
+3. normalize over valid actions in NumPy;
+4. sample using the same `np.random.default_rng(rate_seed)` path as Top-K;
+5. use those original-policy log probabilities as the execution-policy scores;
+6. override the action/relation exactly as Top-K does.
+
+Keep:
+
+```text
+tf_policy
+```
+
+as the regression reference. Do not remove it.
+
+#### Matched-RNG requirement
+
+When Top-K and `numpy_policy` are run with the same seed, initialize their RNG streams identically.
+
+This provides common underlying uniform draws where the trajectories/states remain comparable. Once trajectories diverge, they are not fully paired; document this rather than claiming exact paired sampling.
+
+#### Required test
+
+On a synthetic batch where:
+
+```text
+K >= valid_action_count
+```
+
+Top-K and `numpy_policy`, given identical log probabilities and identical RNG state, must select the same actions samplewise.
+
+### Priority 4 — repeat the most informative stochastic experiments across seeds
+
+After `numpy_policy` exists, run at least:
+
+```text
+seeds = 5 values
+```
+
+for:
+
+```text
+Kinship
+MetaQA
+```
+
+with:
+
+```text
+R=100
+modes = greedy, K=2, K=4, numpy_policy
+```
+
+The purpose is:
+
+- determine whether Kinship's one-question K=2/K=4 Hits@1 change persists;
+- quantify MetaQA's MRR variation;
+- avoid relying on TensorFlow-vs-NumPy backend differences.
+
+MQuAKE is much closer to deterministic; extensive multi-seed sweeps are lower priority unless the cap-sensitivity experiment changes its behavior.
+
+Do not add a complicated in-process multi-seed framework if it risks TensorFlow reproducibility. It is acceptable to run separate seeded processes and aggregate their exported CSV/JSON files afterward.
+
+### Priority 5 — action-cap sensitivity without retraining
+
+The current cap diagnostics are:
+
+```text
+Kinship:          max raw 8,    cap 100, truncated 0.00%
+MetaQA:           max raw 4305, cap 200, truncated ~1.92%
+MQuAKE-ST Single: max raw 479,  cap 200, truncated ~5.15%
+MQuAKE-ST Multi:  max raw 479,  cap 200, truncated ~18.39%
+```
+
+MQuAKE-ST Multi needs a sensitivity check.
+
+Add an optional **evaluation-only** cap override, for example:
+
+```text
+--rate_max_num_actions_override 512
+```
+
+Requirements:
+
+1. default `None` preserves the config;
+2. do not edit YAML;
+3. apply the override before building the trainer/environment;
+4. record configured cap and effective cap in metadata;
+5. do not modify checkpoint files;
+6. before relying on it, inspect whether any trainable checkpoint tensor shape depends on `max_num_actions`;
+7. if checkpoint restore or model semantics depend on the trained cap, stop and report the incompatibility rather than forcing a run.
+
+If safe, run MQuAKE-ST Single and Multi with:
+
+```text
+max_num_actions = 512
+```
+
+because their observed maximum raw count is 479.
+
+At minimum compare:
+
+```text
+greedy
+K=2
+K=4
+numpy_policy
+```
+
+at cap 200 vs 512.
+
+The purpose is to test whether the near-deterministic/flat result is an artifact of action truncation.
+
+MetaQA's maximum raw degree is 4305, so 512 would not eliminate all truncation. MetaQA cap sensitivity is secondary because the observed visited-state truncation rate is much smaller.
+
+---
+
+## 32. Tests and definition of done for the follow-up
+
+### New tests
+
+Add tests for:
+
+#### Evaluation-rollout override
+
+- omitted override preserves YAML `test_rollouts`;
+- override `R=1` creates one rollout/question;
+- output metadata records configured and effective rollout counts.
+
+#### Total question communication
+
+For synthetic `[B,R,T]` arrays:
+
+- question total is exactly `sum(axis=(1,2))`;
+- mean question total is the mean over B;
+- greedy deterministic support yields zero hard rank / Shannon execution cost;
+- for nonnegative costs, total question cost is at least the corresponding single-rollout/path cost.
+
+#### NumPy unrestricted mode
+
+- invalid actions are impossible;
+- distribution equals the original policy normalized over valid actions;
+- with identical RNG state and `K >= valid_count`, Top-K and NumPy unrestricted select identical actions;
+- execution-policy cumulative score uses the same NumPy unrestricted distribution.
+
+#### Protocol semantics
+
+- with `R=1`, Hits@1 equals rollout success;
+- greedy with repeated identical rollout slots has `MRR == Hits@1`;
+- `num_rollouts` is always emitted;
+- multi-rollout MRR outputs also emit total per-question communication fields.
+
+#### Cap override
+
+- default preserves configured cap;
+- override is metadata-visible;
+- no checkpoint path/weight modification occurs;
+- fail clearly if checkpoint/model construction is incompatible.
+
+### Required regression checks
+
+Before accepting the follow-up:
+
+1. Existing `evaluation_infocost.py` remains unchanged in behavior.
+2. Existing P0 `tf_policy` mode remains numerically consistent with the previous output for the same config/seed.
+3. Existing `R=100` outputs remain available and retain their definitions.
+4. `numpy_policy` and `tf_policy` have statistically compatible unrestricted distributions; exact samplewise equality is not required because they use different RNG engines.
+5. No model retraining or checkpoint modification occurs.
+6. MINERVA submodule remains unmodified unless a blocking issue is explicitly documented first.
+
+### Immediate experimental matrix after implementation
+
+Run the smallest informative matrix first:
+
+```text
+Protocol A: single trajectory
+R = 1
+modes = greedy, K=2, K=4, numpy_policy
+datasets = Kinship, MetaQA, MQuAKE-ST Single, MQuAKE-ST Multi
+
+Protocol B: standard MINERVA ranking
+R = 100
+modes = greedy, K=2, K=4, numpy_policy
+datasets = Kinship, MetaQA
+seeds = at least 5
+
+Protocol C: cap sensitivity
+R = 1 and/or 100 as compute permits
+datasets = MQuAKE-ST Single, MQuAKE-ST Multi
+caps = 200, 512
+modes = greedy, K=2, K=4, numpy_policy
+```
+
+Do not immediately rerun every K in `{1,2,4,8,16,32,64,128}` across every seed. The existing full sweeps already show saturation; the compact matrix above should answer the remaining scientific questions with less compute.
+
+### Follow-up definition of done
+
+The follow-up is complete when:
+
+1. single-trajectory (`R=1`) execution can be run without changing YAML/checkpoints;
+2. total per-question communication is available for `R>1` ensemble ranking;
+3. MRR can be paired with ensemble-level communication rather than only per-rollout bits/hop;
+4. NumPy unrestricted sampling provides a backend-matched stochastic reference for Top-K;
+5. Kinship/MetaQA stochastic comparisons have multiple-seed evidence;
+6. MQuAKE action-cap sensitivity is either measured at 512 or explicitly shown to be incompatible with the checkpoint architecture;
+7. all new outputs retain the distinction between:
+   - per-hop rate;
+   - per-path cost;
+   - per-question ensemble cost;
+   - task utility;
+8. no retraining/checkpoint mutation occurs.
+
+### Do not do yet
+
+Until the above is complete:
+
+- do not rewrite the manuscript around MetaQA MRR;
+- do not claim `K=2` gives the MRR gain for only `1 bit/hop` without ensemble-cost qualification;
+- do not call the observed flat Hits@1 curve a universal zero-communication theorem;
+- do not remove the task-agnostic baseline;
+- do not hide the MQuAKE action-cap truncation;
+- do not add communication-aware training.
+
+The purpose of this follow-up is to make the **units of communication and utility operationally consistent** before the 4-page ICASSP manuscript is finalized.
