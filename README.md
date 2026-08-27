@@ -48,7 +48,23 @@ Available configs:
 
 - `configs/kinshiphinton.yaml`
 - `configs/metaqa.yaml`
-- `configs/mquake.yaml`
+- `configs/mquake_st_single.yaml`
+- `configs/mquake_st_multi.yaml`
+
+To evaluate existing checkpoints under greedy and hard per-hop Top-K action budgets
+without retraining, run:
+
+```bash
+bash run_rate_sweep.sh configs/mquake_st_single.yaml 0 \
+  --rate_top_k 1 2 4 8 16 32 64 128 \
+  --rate_include_unrestricted true \
+  --rate_seed 42
+```
+
+Pass an empty GPU argument (for example `""`) to force CPU execution. Rate-sweep
+outputs are written to the new timestamped run's `rate_sweep/` directory as a common
+CSV/JSON table plus budget-performance plots. The task-agnostic coder uses only the
+active graph action representation; it never fits evaluation action choices or labels.
 
 Outputs are written under `./saved_models/<dataset>/<run_name>/`:
 
@@ -64,15 +80,20 @@ minerva_infocost/
 ├── .cache/                 # Cached files for processed datasets
 ├── code/
 │   ├── evaluation_infocost.py # Evaluation entrypoint for InfoCost experiments
+│   ├── evaluation_rate_sweep.py # Greedy/Top-K evaluation from existing checkpoints
 │   └── policy_entropy/
 │       ├── eval.py         # Policy-entropy evaluation pipeline and summaries
 │       ├── metrics.py      # Core entropy/surprisal and identifier-bit utilities
 │       ├── artifacts.py    # Save/load helpers for policy-entropy artifacts
-│       └── plotting.py     # Plot generation for policy-entropy analysis
+│       ├── plotting.py     # Plot generation for policy-entropy analysis
+│       ├── rate_constraints.py # Pure NumPy action/coding helpers
+│       ├── rate_eval.py    # MINERVA-compatible rate/performance evaluation
+│       └── rate_plotting.py # Rate-sweep artifacts and plots
 ├── configs/                # YAML config files for different datasets
 ├── datasets/               # Datasets for evaluation (preprocessed and ready to use)
 ├── minerva/                # MINERVA codebase (submodule)
 ├── run_infocost.sh            # Convenience script to launch configured runs
+├── run_rate_sweep.sh           # Convenience script for rate-sweep evaluation
 └── saved_models/            # Pretrained models and evaluation outputs
     ├── kinshiphinton/      # Outputs for the Kinship-Hinton dataset
     ├── metaqa/             # Outputs for the MetaQA dataset
