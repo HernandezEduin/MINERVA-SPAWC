@@ -10,8 +10,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "code"))
 
 from policy_entropy.rate_eval import (  # noqa: E402
+    QUESTION_TOTAL_SUMMARY_FIELDS,
     minerva_max_pool_metrics,
     recover_raw_action_counts,
+    resolve_evaluation_overrides,
 )
 
 
@@ -44,6 +46,67 @@ class MaxPoolMetricTests(unittest.TestCase):
         )
         self.assertEqual(result["answer_ranks"][0], -1)
         self.assertEqual(result["reciprocal_ranks"][0], 0.0)
+
+    def test_r_one_hits_at_1_equals_rollout_success(self):
+        answer_hits = np.array([[True], [False], [True]])
+        result = minerva_max_pool_metrics(
+            final_entities=np.array([[10], [20], [30]]),
+            answer_hits=answer_hits,
+            path_log_probs=np.array([[-0.1], [-0.2], [-0.3]]),
+        )
+        np.testing.assert_array_equal(result["hits_at_1"], answer_hits[:, 0])
+        self.assertEqual(result["hits_at_1"].mean(), answer_hits.mean())
+
+    def test_repeated_greedy_rollouts_have_mrr_equal_hits_at_1(self):
+        answer_hits = np.array(
+            [[True, True, True, True], [False, False, False, False]]
+        )
+        result = minerva_max_pool_metrics(
+            final_entities=np.array([[10, 10, 10, 10], [20, 20, 20, 20]]),
+            answer_hits=answer_hits,
+            path_log_probs=np.zeros((2, 4)),
+        )
+        self.assertEqual(result["reciprocal_ranks"].mean(), result["hits_at_1"].mean())
+
+
+class EvaluationOverrideTests(unittest.TestCase):
+    def setUp(self):
+        self.options = {
+            "test_rollouts": 100,
+            "max_num_actions": 200,
+            "model_load_dir": "unchanged/model.ckpt",
+        }
+
+    def test_omitted_overrides_preserve_configured_values(self):
+        effective, metadata = resolve_evaluation_overrides(self.options)
+        self.assertEqual(effective["test_rollouts"], 100)
+        self.assertEqual(effective["max_num_actions"], 200)
+        self.assertEqual(metadata["configured_test_rollouts"], 100)
+        self.assertEqual(metadata["effective_test_rollouts"], 100)
+        self.assertFalse(metadata["test_rollouts_overridden"])
+
+    def test_rollout_and_cap_overrides_are_metadata_visible_without_checkpoint_change(self):
+        effective, metadata = resolve_evaluation_overrides(
+            self.options, test_rollouts=1, max_num_actions=512
+        )
+        self.assertEqual(effective["test_rollouts"], 1)
+        self.assertEqual(effective["max_num_actions"], 512)
+        self.assertEqual(metadata["configured_test_rollouts"], 100)
+        self.assertEqual(metadata["effective_test_rollouts"], 1)
+        self.assertEqual(metadata["configured_max_num_actions"], 200)
+        self.assertEqual(metadata["effective_max_num_actions"], 512)
+        self.assertEqual(effective["model_load_dir"], self.options["model_load_dir"])
+        self.assertTrue(metadata["model_load_dir_unchanged"])
+
+    def test_multi_rollout_schema_requires_question_total_fields(self):
+        expected = {
+            "mean_question_fixed_rank_bits",
+            "mean_question_surprisal_bits",
+            "mean_question_shannon_code_bits",
+            "mean_question_entropy_sum_bits",
+        }
+        self.assertTrue(expected.issubset(set(QUESTION_TOTAL_SUMMARY_FIELDS)))
+
 
 
 class RawActionCountTests(unittest.TestCase):

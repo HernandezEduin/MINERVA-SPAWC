@@ -9,6 +9,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "code"))
 
 from policy_entropy.rate_constraints import (  # noqa: E402
+    accumulate_execution_path_log_probs,
     build_global_relation_prior,
     cross_entropy_bits,
     effective_fixed_rank_bits,
@@ -16,6 +17,7 @@ from policy_entropy.rate_constraints import (  # noqa: E402
     fixed_and_gold_hop_path_costs,
     kl_bits,
     normalized_valid_log_probs,
+    question_total_cost_bits,
     select_actions_from_log_probs,
     select_greedy,
     selected_surprisal_bits,
@@ -55,6 +57,35 @@ class RateConstraintTests(unittest.TestCase):
         original = normalized_valid_log_probs(self.log_probs, self.valid)
         np.testing.assert_array_equal(retained, self.valid)
         np.testing.assert_allclose(truncated[self.valid], original[self.valid], atol=1e-12)
+
+    def test_numpy_policy_matches_topk_with_full_support_and_identical_rng(self):
+        numpy_action, numpy_execution, numpy_support = select_actions_from_log_probs(
+            self.log_probs,
+            self.valid,
+            mode="numpy_policy",
+            rng=np.random.default_rng(123),
+        )
+        topk_action, topk_execution, topk_support = select_actions_from_log_probs(
+            self.log_probs,
+            self.valid,
+            mode="topk",
+            top_k=8,
+            rng=np.random.default_rng(123),
+        )
+        original = normalized_valid_log_probs(self.log_probs, self.valid)
+        np.testing.assert_array_equal(numpy_support, self.valid)
+        np.testing.assert_array_equal(topk_support, self.valid)
+        np.testing.assert_allclose(numpy_execution, topk_execution)
+        np.testing.assert_allclose(numpy_execution[self.valid], original[self.valid])
+        np.testing.assert_array_equal(numpy_action, topk_action)
+        self.assertTrue(np.all(self.valid[np.arange(numpy_action.size), numpy_action]))
+
+        cumulative = accumulate_execution_path_log_probs(
+            np.zeros(numpy_action.size), numpy_execution, numpy_action
+        )
+        np.testing.assert_allclose(
+            cumulative, numpy_execution[np.arange(numpy_action.size), numpy_action]
+        )
 
     def test_greedy_is_valid_and_uses_lowest_index_for_ties(self):
         tied = np.log(np.array([[0.4, 0.4, 0.2, 1e-30]]))
@@ -138,6 +169,15 @@ class RateConstraintTests(unittest.TestCase):
         fixed, gold = fixed_and_gold_hop_path_costs(costs, np.array([2, 3]))
         self.assertTrue(np.all(gold <= fixed))
         np.testing.assert_allclose(gold[1], fixed[1])
+
+    def test_question_total_cost_sums_all_rollouts_and_hops(self):
+        costs = np.arange(1, 13, dtype=np.float64).reshape(2, 2, 3)
+        totals = question_total_cost_bits(costs)
+        np.testing.assert_allclose(totals, costs.sum(axis=(1, 2)))
+        self.assertTrue(np.all(totals >= costs[:, 0, :].sum(axis=1)))
+        np.testing.assert_array_equal(
+            question_total_cost_bits(np.zeros((2, 4, 3))), np.zeros(2)
+        )
 
 
 if __name__ == "__main__":

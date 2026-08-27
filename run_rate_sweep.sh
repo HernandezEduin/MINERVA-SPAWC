@@ -2,7 +2,7 @@
 
 config="$1"
 shift
-export PYTHONPATH="./minerva:${PYTHONPATH:-}"
+export PYTHONPATH=".:./minerva:${PYTHONPATH:-}"
 gpu_id=""
 if [[ $# -gt 0 && "$1" != --* ]]; then
   gpu_id="$1"

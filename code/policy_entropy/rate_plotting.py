@@ -145,6 +145,10 @@ def generate_rate_sweep_plots(
     """Generate the required budget/performance and coding-baseline plots."""
     os.makedirs(output_dir, exist_ok=True)
     paths: Dict[str, Optional[str]] = {}
+    rollout_counts = {int(summary["num_rollouts"]) for summary in summaries}
+    if len(rollout_counts) != 1:
+        raise ValueError("A rate-sweep plot set must use one rollout protocol.")
+    num_rollouts = next(iter(rollout_counts))
     paths["hits1_vs_budget"] = _plot_curve(
         summaries,
         os.path.join(output_dir, "hits1_vs_budget.png"),
@@ -152,7 +156,7 @@ def generate_rate_sweep_plots(
         "hits_at_1",
         "Nominal hard budget (bits/hop)",
         "Hits@1",
-        f"{title_prefix}: Hits@1 vs hard action budget",
+        f"{title_prefix}: Hits@1 vs per-hop constraint (R={num_rollouts})",
         constrained_only=True,
         unrestricted_reference=True,
     )
@@ -174,8 +178,47 @@ def generate_rate_sweep_plots(
         "hits_at_1",
         "Empirical mean fixed-rank bits/hop",
         "Hits@1",
-        f"{title_prefix}: Hits@1 vs empirical fixed-rank rate",
+        f"{title_prefix}: Hits@1 vs per-hop fixed-rank diagnostic (R={num_rollouts})",
     )
+
+    if num_rollouts == 1:
+        paths["single_success_vs_path_fixed_rank"] = _plot_curve(
+            summaries,
+            os.path.join(output_dir, "single_success_vs_path_fixed_rank.png"),
+            "mean_path_fixed_rank_bits",
+            "single_rollout_success_rate",
+            "Mean fixed-rank bits/executed path",
+            "Single-rollout success rate",
+            f"{title_prefix}: single-trajectory utility vs path communication",
+        )
+        paths["ped_vs_path_fixed_rank"] = _plot_curve(
+            summaries,
+            os.path.join(output_dir, "ped_vs_path_fixed_rank.png"),
+            "mean_path_fixed_rank_bits",
+            "ped",
+            "Mean fixed-rank bits/executed path",
+            "Path edit distance",
+            f"{title_prefix}: single-trajectory PED vs path communication",
+        )
+    else:
+        paths["hits1_vs_question_fixed_rank"] = _plot_curve(
+            summaries,
+            os.path.join(output_dir, "hits1_vs_question_fixed_rank.png"),
+            "mean_question_fixed_rank_bits",
+            "hits_at_1",
+            f"Mean total fixed-rank bits/question across R={num_rollouts}",
+            "MINERVA MAX-pool Hits@1",
+            f"{title_prefix}: ensemble Hits@1 vs total ensemble communication",
+        )
+        paths["mrr_vs_question_fixed_rank"] = _plot_curve(
+            summaries,
+            os.path.join(output_dir, "mrr_vs_question_fixed_rank.png"),
+            "mean_question_fixed_rank_bits",
+            "mrr",
+            f"Mean total fixed-rank bits/question across R={num_rollouts}",
+            "MINERVA candidate-ranking MRR",
+            f"{title_prefix}: ensemble MRR vs total ensemble communication",
+        )
 
     constrained = [summary for summary in summaries if summary.get("mode") != "tf_policy"]
     x_values, task_values, _ = _finite_xy(

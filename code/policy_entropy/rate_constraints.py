@@ -145,8 +145,12 @@ def select_actions_from_log_probs(
             log_probs, valid_mask, top_k
         )
         action_idx = sample_log_probs(execution_log_probs, rng)
+    elif mode == "numpy_policy":
+        execution_log_probs = normalized_valid_log_probs(log_probs, valid_mask)
+        retained_mask = np.asarray(valid_mask, dtype=bool).copy()
+        action_idx = sample_log_probs(execution_log_probs, rng)
     else:
-        raise ValueError("mode must be 'greedy' or 'topk'.")
+        raise ValueError("mode must be 'greedy', 'topk', or 'numpy_policy'.")
     return action_idx, execution_log_probs, retained_mask
 
 
@@ -171,6 +175,29 @@ def selected_surprisal_bits(
     if np.any(~np.isfinite(selected)):
         raise ValueError("Selected actions must have finite log probability.")
     return -selected / LOG2
+
+
+def accumulate_execution_path_log_probs(
+    cumulative_log_probs: np.ndarray,
+    execution_log_probs: np.ndarray,
+    action_idx: np.ndarray,
+) -> np.ndarray:
+    """Add selected execution-policy log probabilities to a path score."""
+    cumulative_log_probs = np.asarray(cumulative_log_probs, dtype=np.float64)
+    execution_log_probs = np.asarray(execution_log_probs, dtype=np.float64)
+    action_idx = np.asarray(action_idx, dtype=np.int64)
+    if execution_log_probs.ndim != 2:
+        raise ValueError("execution_log_probs must have shape [num_rollouts, num_actions].")
+    if cumulative_log_probs.shape != (execution_log_probs.shape[0],):
+        raise ValueError("cumulative_log_probs must contain one score per rollout.")
+    if action_idx.shape != cumulative_log_probs.shape:
+        raise ValueError("action_idx must contain one selected action per rollout.")
+    if np.any(action_idx < 0) or np.any(action_idx >= execution_log_probs.shape[1]):
+        raise ValueError("action_idx contains an out-of-range action.")
+    selected = execution_log_probs[np.arange(execution_log_probs.shape[0]), action_idx]
+    if np.any(~np.isfinite(selected)):
+        raise ValueError("Selected execution-policy actions must have finite log probability.")
+    return cumulative_log_probs + selected
 
 
 def effective_fixed_rank_bits(effective_support: np.ndarray) -> np.ndarray:
@@ -306,3 +333,19 @@ def fixed_and_gold_hop_path_costs(
     mask = np.arange(per_step_cost.shape[2])[None, None, :] < gold_hops[:, None, None]
     gold = np.where(mask, per_step_cost, 0.0).sum(axis=2)
     return fixed, gold
+
+
+def question_total_cost_bits(per_step_cost: np.ndarray) -> np.ndarray:
+    """Sum communication over every rollout and hop for each question.
+
+    ``per_step_cost`` must use the protocol-explicit shape ``[B, R, T]``.
+    The returned ``[B]`` values are ensemble totals, not per-path averages.
+    """
+    per_step_cost = np.asarray(per_step_cost, dtype=np.float64)
+    if per_step_cost.ndim != 3:
+        raise ValueError("per_step_cost must have shape [questions, rollouts, horizon].")
+    if np.any(~np.isfinite(per_step_cost)):
+        raise ValueError("Communication costs must be finite.")
+    if np.any(per_step_cost < -1e-12):
+        raise ValueError("Communication costs must be nonnegative.")
+    return np.maximum(per_step_cost, 0.0).sum(axis=(1, 2))

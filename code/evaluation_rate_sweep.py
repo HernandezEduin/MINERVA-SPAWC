@@ -22,6 +22,7 @@ from policy_entropy.rate_eval import (
     build_graph_structural_relation_prior,
     evaluate_rate_mode,
     recover_raw_action_counts,
+    resolve_evaluation_overrides,
 )
 from policy_entropy.rate_plotting import (
     generate_rate_sweep_plots,
@@ -51,7 +52,10 @@ def preparse_rate_arguments(argv: List[str]) -> Tuple[argparse.Namespace, List[s
         "--rate_top_k", nargs="+", type=int, default=[1, 2, 4, 8, 16, 32, 64, 128]
     )
     parser.add_argument("--rate_include_unrestricted", type=_str2bool, default=True)
+    parser.add_argument("--rate_include_numpy_policy", type=_str2bool, default=False)
     parser.add_argument("--rate_seed", type=int, default=42)
+    parser.add_argument("--rate_test_rollouts", type=int, default=None)
+    parser.add_argument("--rate_max_num_actions_override", type=int, default=None)
     parser.add_argument("--rate_compute_task_agnostic", type=_str2bool, default=True)
     parser.add_argument("--rate_compute_truncation_diagnostics", type=_str2bool, default=True)
     parser.add_argument("--rate_prior_alpha", type=float, default=1.0)
@@ -71,6 +75,16 @@ def preparse_rate_arguments(argv: List[str]) -> Tuple[argparse.Namespace, List[s
         parser.error("--rate_prior_alpha must be positive.")
     if rate_args.rate_max_batches is not None and rate_args.rate_max_batches < 1:
         parser.error("--rate_max_batches must be positive when provided.")
+    if rate_args.rate_test_rollouts is not None and rate_args.rate_test_rollouts < 1:
+        parser.error("--rate_test_rollouts must be positive when provided.")
+    if (
+        rate_args.rate_max_num_actions_override is not None
+        and rate_args.rate_max_num_actions_override < 1
+    ):
+        parser.error(
+            "--rate_max_num_actions_override must be positive when provided."
+        )
+
     return rate_args, minerva_args
 
 
@@ -169,6 +183,12 @@ def main() -> None:
     rate_args, minerva_args = preparse_rate_arguments(sys.argv[1:])
     sys.argv = [sys.argv[0]] + minerva_args
     options = read_options()
+    options, override_metadata = resolve_evaluation_overrides(
+        options,
+        test_rollouts=rate_args.rate_test_rollouts,
+        max_num_actions=rate_args.rate_max_num_actions_override,
+    )
+    checkpoint_before = _checkpoint_identity(options["model_load_dir"])
     if options["use_beam"]:
         raise ValueError("Rate-sweep experiments require use_beam=False for comparability.")
     if options["pool"] != "max":
@@ -217,12 +237,23 @@ def main() -> None:
         summaries = []
         with tf.compat.v1.Session(config=config) as sess:
             set_seeds(options["seed"])
-            trainer.initialize(restore=options["model_load_dir"], sess=sess)
+            try:
+                trainer.initialize(restore=options["model_load_dir"], sess=sess)
+            except (tf.errors.OpError, ValueError) as exc:
+                if override_metadata["max_num_actions_overridden"]:
+                    raise RuntimeError(
+                        "Checkpoint restore is incompatible with the requested "
+                        "evaluation-only max_num_actions override."
+                    ) from exc
+                raise
+            override_metadata["checkpoint_restore_compatible"] = True
 
             requested_modes = [("greedy", None)]
             requested_modes.extend(("topk", top_k) for top_k in rate_args.rate_top_k)
+            if rate_args.rate_include_numpy_policy:
+                requested_modes.append(("numpy_policy", None))
             if rate_args.rate_include_unrestricted:
-                # Run this last: NumPy override modes do not execute TF's categorical sampler.
+                # Keep upstream TensorFlow sampling as the P0 regression reference.
                 requested_modes.append(("tf_policy", None))
 
             for action_mode, top_k in requested_modes:
@@ -239,9 +270,22 @@ def main() -> None:
                     max_batches=rate_args.rate_max_batches,
                 )
                 summary["dataset"] = _dataset_name(options)
-                summary["rate_label"] = (
-                    "greedy" if action_mode == "greedy" else f"K={top_k}" if top_k else "unrestricted"
+                summary.update(
+                    {
+                        "configured_test_rollouts": override_metadata["configured_test_rollouts"],
+                        "effective_test_rollouts": override_metadata["effective_test_rollouts"],
+                        "configured_max_num_actions": override_metadata["configured_max_num_actions"],
+                        "effective_max_num_actions": override_metadata["effective_max_num_actions"],
+                    }
                 )
+                if action_mode == "greedy":
+                    summary["rate_label"] = "greedy"
+                elif action_mode == "topk":
+                    summary["rate_label"] = f"K={top_k}"
+                elif action_mode == "numpy_policy":
+                    summary["rate_label"] = "unrestricted NumPy"
+                else:
+                    summary["rate_label"] = "unrestricted"
                 summaries.append(summary)
                 logger.info(
                     "Rate result %s: Hits@1=%s MRR=%s PED=%s",
@@ -250,6 +294,13 @@ def main() -> None:
                     summary["mrr"],
                     summary["ped"],
                 )
+
+        checkpoint_after = _checkpoint_identity(options["model_load_dir"])
+        override_metadata["checkpoint_unchanged_during_evaluation"] = (
+            checkpoint_after == checkpoint_before
+        )
+        if not override_metadata["checkpoint_unchanged_during_evaluation"]:
+            raise RuntimeError("Checkpoint files changed during evaluation.")
 
         greedy = next(summary for summary in summaries if summary["mode"] == "greedy")
         unrestricted = next(
@@ -276,8 +327,9 @@ def main() -> None:
         metadata = {
             "dataset": _dataset_name(options),
             "rate_arguments": vars(rate_args),
+            "evaluation_overrides": override_metadata,
             "minerva_options": options,
-            "checkpoint": _checkpoint_identity(options["model_load_dir"]),
+            "checkpoint": checkpoint_after,
             "root_git_head": _git_revision(os.getcwd()),
             "minerva_git_head": _git_revision(os.path.join(os.getcwd(), "minerva")),
             "task_agnostic_prior": prior_metadata,
@@ -287,10 +339,15 @@ def main() -> None:
                 "greedy_zero_payload": "Requires synchronized policy, state/task, action set, and ordering.",
                 "topk_budget": "A hard retained-support/local-rank bound, not entropy-coded traffic.",
                 "sampling_backend": (
-                    "Top-K uses seeded NumPy PCG64; unrestricted tf_policy uses upstream "
-                    "TensorFlow categorical sampling. Equal distributions can have different "
-                    "finite-sample metrics across those backends."
+                    "Top-K and numpy_policy each initialize the same seeded NumPy PCG64 "
+                    "stream. They share draws while states remain comparable; tf_policy "
+                    "remains the upstream TensorFlow categorical regression reference."
                 ),
+                "rollout_utility_and_cost": (
+                    "For R>1, MINERVA Hits@1/MRR are rollout-ensemble metrics. "
+                    "mean_question_* fields sum communication across all R trajectories and hops."
+                ),
+                "single_trajectory": "For R=1, Hits@1 equals executed-rollout success.",
                 "gold_hop_cost": "A diagnostic mask over the unchanged fixed-horizon trajectory.",
                 "ped": "Only entity-edge path edit distance is labeled PED; relation edit distance is separate.",
             },

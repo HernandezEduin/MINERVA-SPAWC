@@ -10,18 +10,68 @@ import numpy as np
 from tqdm import tqdm
 
 from policy_entropy.rate_constraints import (
+    accumulate_execution_path_log_probs,
     build_global_relation_prior,
     cross_entropy_bits,
     effective_fixed_rank_bits,
     entropy_bits_from_normalized_log_probs,
     fixed_and_gold_hop_path_costs,
     kl_bits,
+    question_total_cost_bits,
     selected_surprisal_bits,
     select_actions_from_log_probs,
     shannon_integer_code_length,
     task_agnostic_local_log_probs,
     valid_action_mask,
 )
+
+
+QUESTION_TOTAL_SUMMARY_FIELDS = (
+    "mean_question_fixed_rank_bits",
+    "mean_question_surprisal_bits",
+    "mean_question_shannon_code_bits",
+    "mean_question_entropy_sum_bits",
+    "mean_question_task_agnostic_surprisal_bits",
+    "mean_question_task_agnostic_shannon_bits",
+)
+
+
+def resolve_evaluation_overrides(
+    options: Dict[str, Any],
+    test_rollouts: Optional[int] = None,
+    max_num_actions: Optional[int] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Return effective evaluation options and explicit configured/effective metadata."""
+    configured = dict(options)
+    effective = dict(options)
+
+    overrides = {
+        "test_rollouts": test_rollouts,
+        "max_num_actions": max_num_actions,
+    }
+    for key, override in overrides.items():
+        if override is None:
+            continue
+        if isinstance(override, bool) or int(override) != override or override < 1:
+            raise ValueError(f"Evaluation override {key} must be a positive integer.")
+        effective[key] = int(override)
+
+    metadata = {
+        "configured_test_rollouts": int(configured["test_rollouts"]),
+        "effective_test_rollouts": int(effective["test_rollouts"]),
+        "test_rollouts_overridden": test_rollouts is not None,
+        "configured_max_num_actions": int(configured["max_num_actions"]),
+        "effective_max_num_actions": int(effective["max_num_actions"]),
+        "max_num_actions_overridden": max_num_actions is not None,
+        "model_load_dir_unchanged": (
+            effective.get("model_load_dir") == configured.get("model_load_dir")
+        ),
+        "checkpoint_shape_note": (
+            "max_num_actions sizes graph/action arrays and non-trainable candidate axes; "
+            "checkpoint compatibility is confirmed by restoring into the effective graph."
+        ),
+    }
+    return effective, metadata
 
 
 def minerva_max_pool_metrics(
@@ -214,8 +264,10 @@ def collect_rate_single_episode(
     raw_action_counts: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Run one fixed-horizon episode with an optional NumPy action override."""
-    if action_mode not in {"tf_policy", "greedy", "topk"}:
-        raise ValueError("action_mode must be 'tf_policy', 'greedy', or 'topk'.")
+    if action_mode not in {"tf_policy", "greedy", "topk", "numpy_policy"}:
+        raise ValueError(
+            "action_mode must be 'tf_policy', 'greedy', 'topk', or 'numpy_policy'."
+        )
     if action_mode == "topk" and top_k is None:
         raise ValueError("top_k is required for action_mode='topk'.")
 
@@ -342,10 +394,9 @@ def collect_rate_single_episode(
                 raw_counts > trainer.max_num_actions
             )
 
-        selected_execution_log_prob = execution_log_probs[
-            np.arange(flat_size), action_idx
-        ]
-        path_log_prob += selected_execution_log_prob
+        path_log_prob = accumulate_execution_path_log_probs(
+            path_log_prob, execution_log_probs, action_idx
+        )
         relation_history.append(np.asarray(chosen_relation).copy())
         previous_relation = chosen_relation
         state = episode(action_idx)
@@ -391,6 +442,7 @@ def collect_rate_single_episode(
 
     path_cost_sources = {
         "entropy": "entropy_bits",
+        "fixed_rank": "fixed_budget_bits",
         "original_policy_entropy": "original_policy_entropy_bits",
         "surprisal": "surprisal_bits",
         "shannon_code": "shannon_code_bits",
@@ -402,6 +454,17 @@ def collect_rate_single_episode(
             fixed, gold = fixed_and_gold_hop_path_costs(result[step_key], result["gold_hops"])
             result[f"path_{prefix}_fixed_horizon_bits"] = fixed
             result[f"path_{prefix}_gold_hops_bits"] = gold
+    question_cost_sources = {
+        "question_fixed_rank_bits": "fixed_budget_bits",
+        "question_surprisal_bits": "surprisal_bits",
+        "question_shannon_code_bits": "shannon_code_bits",
+        "question_entropy_sum_bits": "entropy_bits",
+        "question_task_agnostic_surprisal_bits": "task_agnostic_surprisal_bits",
+        "question_task_agnostic_shannon_bits": "task_agnostic_shannon_bits",
+    }
+    for output_key, step_key in question_cost_sources.items():
+        if step_key in result:
+            result[output_key] = question_total_cost_bits(result[step_key])
 
     return result
 
@@ -499,6 +562,13 @@ def evaluate_rate_mode(
             "mean_path_surprisal_gold_hops_bits": "path_surprisal_gold_hops_bits",
             "mean_path_shannon_code_fixed_horizon_bits": "path_shannon_code_fixed_horizon_bits",
             "mean_path_shannon_code_gold_hops_bits": "path_shannon_code_gold_hops_bits",
+            "mean_path_fixed_rank_bits": "path_fixed_rank_fixed_horizon_bits",
+            "mean_question_fixed_rank_bits": "question_fixed_rank_bits",
+            "mean_question_surprisal_bits": "question_surprisal_bits",
+            "mean_question_shannon_code_bits": "question_shannon_code_bits",
+            "mean_question_entropy_sum_bits": "question_entropy_sum_bits",
+            "mean_question_task_agnostic_surprisal_bits": "question_task_agnostic_surprisal_bits",
+            "mean_question_task_agnostic_shannon_bits": "question_task_agnostic_shannon_bits",
             "mean_path_task_agnostic_surprisal_fixed_horizon_bits": "path_task_agnostic_surprisal_fixed_horizon_bits",
             "mean_path_task_agnostic_surprisal_gold_hops_bits": "path_task_agnostic_surprisal_gold_hops_bits",
             "mean_path_task_agnostic_shannon_fixed_horizon_bits": "path_task_agnostic_shannon_fixed_horizon_bits",
@@ -559,7 +629,7 @@ def evaluate_rate_mode(
             "deterministic argmax"
             if action_mode == "greedy"
             else "numpy.random.default_rng (PCG64)"
-            if action_mode == "topk"
+            if action_mode in {"topk", "numpy_policy"}
             else "upstream TensorFlow categorical"
         ),
         "action_payload_interpretation": (
@@ -567,6 +637,8 @@ def evaluate_rate_mode(
             if action_mode == "greedy"
             else "fixed local rank within retained support"
             if action_mode == "topk"
+            else "unrestricted pretrained NumPy policy"
+            if action_mode == "numpy_policy"
             else "unrestricted pretrained TensorFlow policy"
         ),
     }
@@ -594,6 +666,8 @@ def evaluate_rate_mode(
         "mean_path_surprisal_gold_hops_bits",
         "mean_path_shannon_code_fixed_horizon_bits",
         "mean_path_shannon_code_gold_hops_bits",
+        "mean_path_fixed_rank_bits",
+        *QUESTION_TOTAL_SUMMARY_FIELDS,
         "mean_task_agnostic_surprisal_bits",
         "mean_task_agnostic_shannon_bits",
         "mean_path_task_agnostic_surprisal_fixed_horizon_bits",
@@ -615,6 +689,26 @@ def evaluate_rate_mode(
         "mean_retained_count_for_truncated_states",
     ]
     summary.update({name: accumulator.mean(name) for name in output_metrics})
+
+    is_single_trajectory = trainer.test_rollouts == 1
+    summary["single_rollout_success_rate"] = (
+        summary["rollout_success_rate"] if is_single_trajectory else None
+    )
+    summary["utility_protocol"] = (
+        "single_trajectory" if is_single_trajectory else "rollout_ensemble_candidate_ranking"
+    )
+    summary["communication_scope"] = (
+        "mean_question_* sums all rollout and hop costs; mean_path_* averages one path; "
+        "mean_step_* averages one rollout-hop position."
+    )
+    if is_single_trajectory and not np.isclose(
+        summary["hits_at_1"], summary["single_rollout_success_rate"], atol=1e-12
+    ):
+        raise RuntimeError("R=1 protocol invariant failed: Hits@1 != rollout success.")
+    if action_mode == "greedy" and not np.isclose(
+        summary["mrr"], summary["hits_at_1"], atol=1e-12
+    ):
+        raise RuntimeError("Greedy protocol invariant failed: MRR != Hits@1.")
 
     # Compatibility aliases requested by the brief's minimum common schema.
     summary["mean_path_surprisal_bits"] = summary["mean_path_surprisal_fixed_horizon_bits"]
