@@ -988,84 +988,84 @@ Do not automatically overwrite manuscript values.
 
 ### Repository safety
 
-- [ ] Verify current root HEAD.
-- [ ] Verify `minerva` submodule SHA.
-- [ ] Do not modify the submodule.
-- [ ] Preserve `evaluation_infocost.py` behavior.
-- [ ] Preserve current YAML configs.
+- [x] Verify current root HEAD.
+- [x] Verify `minerva` submodule SHA.
+- [x] Do not modify the submodule.
+- [x] Preserve `evaluation_infocost.py` behavior.
+- [x] Preserve current YAML configs.
 
 ### Rate utilities
 
-- [ ] Valid-action mask helper.
-- [ ] Greedy selection.
-- [ ] Top-K masking and stable renormalization.
-- [ ] Seeded sampling from log probabilities.
-- [ ] Effective fixed-rank bits.
-- [ ] Unit tests.
+- [x] Valid-action mask helper.
+- [x] Greedy selection.
+- [x] Top-K masking and stable renormalization.
+- [x] Seeded sampling from log probabilities.
+- [x] Effective fixed-rank bits.
+- [x] Unit tests.
 
 ### Performance metrics
 
-- [ ] Cumulative log probability under the execution policy.
-- [ ] Final entities and answer hits.
-- [ ] MINERVA `pool="max"` Hits@1.
-- [ ] MRR if straightforward.
-- [ ] Top-ranked PED.
-- [ ] Rollout success rate under a distinct name.
+- [x] Cumulative log probability under the execution policy.
+- [x] Final entities and answer hits.
+- [x] MINERVA `pool="max"` Hits@1.
+- [x] MRR.
+- [x] Top-ranked PED.
+- [x] Rollout success rate under a distinct name.
 
 ### Greedy diagnostic
 
-- [ ] Add greedy mode.
-- [ ] Verify K=1 matches greedy.
-- [ ] Report greedy Hits@1/PED.
-- [ ] Mark action-payload rate as 0 bits under synchronized side information.
-- [ ] Flag nearly unchanged greedy performance.
+- [x] Add greedy mode.
+- [x] Verify K=1 matches greedy.
+- [x] Report greedy Hits@1/PED.
+- [x] Mark action-payload rate as 0 bits under synchronized side information.
+- [x] Report the exact greedy-vs-unrestricted delta; no automatic "nearly unchanged" classification is applied because no threshold is specified.
 
 ### Top-K sweep
 
-- [ ] K = `1,2,4,8,16,32,64,128,unrestricted`.
-- [ ] Nominal `B=log2(K)`.
-- [ ] Empirical fixed-rank bits.
-- [ ] Hits@1-vs-budget plot.
-- [ ] PED-vs-budget plot.
-- [ ] Hits@1-vs-empirical-rate plot.
+- [x] K = `1,2,4,8,16,32,64,128,unrestricted`.
+- [x] Nominal `B=log2(K)`.
+- [x] Empirical fixed-rank bits.
+- [x] Hits@1-vs-budget plot.
+- [x] PED-vs-budget plot.
+- [x] Hits@1-vs-empirical-rate plot.
 
 ### Task-agnostic baseline
 
-- [ ] Smoothed global relation prior without test action labels.
-- [ ] Local task-agnostic q.
-- [ ] Task-agnostic selected-action surprisal.
-- [ ] Cross entropy/KL against task-conditioned policy.
-- [ ] Correctly label graph-structural vs train-only prior.
+- [x] Smoothed global relation prior without test action labels.
+- [x] Local task-agnostic q.
+- [x] Task-agnostic selected-action surprisal.
+- [x] Cross entropy/KL against task-conditioned policy.
+- [x] Correctly label the prior as graph-structural.
 
 ### Operational code length
 
-- [ ] Integer Shannon length for task-conditioned policy.
-- [ ] Integer Shannon length for task-agnostic q.
-- [ ] Separate entropy, surprisal, and integer code length.
+- [x] Integer Shannon length for task-conditioned policy.
+- [x] Integer Shannon length for task-agnostic q.
+- [x] Separate entropy, surprisal, and integer code length.
 
 ### Correctness/horizon
 
-- [ ] Rollout success mask.
-- [ ] Success-conditioned path cost.
-- [ ] Failure-conditioned path cost.
-- [ ] Fixed-horizon path cost.
-- [ ] Gold-hop-masked diagnostic cost.
+- [x] Rollout success mask.
+- [x] Success-conditioned path cost.
+- [x] Failure-conditioned path cost.
+- [x] Fixed-horizon path cost.
+- [x] Gold-hop-masked diagnostic cost.
 
 ### Action-cap diagnostics
 
-- [ ] Recover raw candidate degree if reliable.
-- [ ] Visited-state truncation rate.
-- [ ] Per-hop truncation rate.
-- [ ] Explicit limitation if unavailable.
+- [x] Recover raw candidate degree and validate it against the capped action store.
+- [x] Visited-state truncation rate.
+- [x] Per-hop truncation rate.
+- [x] Emit an explicit limitation if recovery or validation is unavailable.
 
 ### Outputs
 
-- [ ] Combined CSV summary.
-- [ ] JSON metadata/results.
-- [ ] Save seed/config/checkpoint identity.
-- [ ] Dedicated `rate_sweep/` output directory.
-- [ ] `run_rate_sweep.sh`.
-- [ ] Document usage.
+- [x] Combined CSV summary.
+- [x] JSON metadata/results.
+- [x] Save seed/config/checkpoint identity.
+- [x] Dedicated `rate_sweep/` output directory.
+- [x] `run_rate_sweep.sh`.
+- [x] Document usage.
 
 ---
 
@@ -1182,3 +1182,45 @@ Pay special attention to:
 Prioritize **correctness and comparability with the current evaluator** over refactoring elegance.
 
 If repository behavior conflicts with this brief, preserve current semantics and document the conflict rather than silently redefining the experiment.
+
+
+---
+
+## 29. Implementation status — 2026-08-27
+
+P0 is implemented as an additive, evaluation-only path. No model was retrained, no checkpoint was modified, and no existing YAML configuration, `code/evaluation_infocost.py`, manuscript file, or MINERVA submodule source was changed. The submodule remains at `9bf1ae998d14471c3f7c31f70969d0bbf9873329`; its two manuscript deletions were present before this work.
+
+### Added or modified files
+
+```text
+code/evaluation_rate_sweep.py
+code/policy_entropy/rate_constraints.py
+code/policy_entropy/rate_eval.py
+code/policy_entropy/rate_plotting.py
+run_rate_sweep.sh
+tests/__init__.py
+tests/test_rate_constraints.py
+tests/test_rate_eval.py
+README.md
+```
+
+The implementation loads one existing checkpoint and evaluates greedy, Top-K, and upstream TensorFlow-policy modes with `use_beam=False` and `pool="max"`. Top-K rollout ranking uses cumulative execution-policy probability. Hits@1/MRR retain MINERVA duplicate-terminal-entity semantics, and PED uses the highest-scoring rollout. Single-answer and multi-answer reward handling remains dataset-native.
+
+The task-agnostic distribution is a smoothed graph-structural relation prior built from graph actions, not evaluation labels or selected test actions. Entropy, selected-action surprisal, Shannon integer length, fixed-rank budget, task-agnostic cross entropy/KL, correctness-conditioned costs, gold-hop diagnostics, and validated action-cap diagnostics are reported separately.
+
+### Validation completed
+
+- Existing Kinship InfoCost evaluation ran before and after implementation with exactly identical summary statistics.
+- The new unrestricted `tf_policy` entropy statistics agree with the existing evaluator within `1e-6`.
+- All 15 pure NumPy unit tests pass in the `minerva_tf2` conda environment.
+- Python compilation, shell syntax checks, and `git diff --check` pass.
+- Greedy and Top-K with `K=1` are identical and report zero execution payload.
+- Checkpoint file sizes and modification times are unchanged.
+- A full Kinship sweep completed for `K=1,2,4,8,16,32,64,128` plus unrestricted.
+- MQuAKE-ST single, MQuAKE-ST multi, and MetaQA completed bounded one-batch smoke evaluations and produced the common CSV/JSON/plot format. Full-dataset sweeps for those three configurations have not yet been run.
+
+### First full-sweep observation
+
+For Kinship with rate seed 42, greedy/K=1 preserved unrestricted Hits@1 (`0.960396`) but had lower MRR. Top-K with K=2 and K=4 produced Hits@1 `0.970297` in this run. This is a single-seed observation and may reflect inference regularization; it is not treated as an established improvement.
+
+Top-K sampling uses seeded NumPy PCG64, while unrestricted `tf_policy` uses the upstream TensorFlow categorical sampler. Equal distributions can therefore produce different finite-sample results across these backends. The output metadata records this comparability caveat explicitly.
