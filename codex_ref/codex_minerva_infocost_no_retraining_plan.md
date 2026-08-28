@@ -744,3 +744,33 @@ At the end of the implementation turn, **do not commit or push**. Report:
 9. launcher scripts created;
 10. any remaining scientific/implementation caveats;
 11. exact commands the user should run next.
+
+---
+
+## 20. Implementation status — 2026-08-29
+
+The post-review evaluator support is **implemented and locally validated**. The full four-dataset campaign remains **pending user launch**; therefore Sections 16–17 must not yet be read as empirically resolved.
+
+Implemented without changing the MINERVA submodule:
+
+- opt-in `deterministic_beam` execution through an evaluation-only mirror of the pinned `TrainerNLQ.test(..., beam=True)` pruning/state-reordering semantics;
+- cumulative pretrained-policy log-probability ranking, the pinned default-`argsort` tie behavior, and unchanged MINERVA `pool="max"` candidate ranking;
+- `--rate_include_deterministic_beam` and `--rate_beam_width` CLI controls, both disabled/unspecified by default;
+- per-question terminal diversity, candidate-answer coverage, conditional-MRR, unique-correct-terminal, and correct-rollout diagnostics for all execution modes;
+- explicit `mean_question_stochastic_action_payload_bits`, equal to zero for greedy and deterministic beam under the synchronized-side-information hypothesis;
+- null fixed-rank/surprisal/Shannon execution-message fields for deterministic beam rather than invented branch-message costs;
+- CPU launchers `experiments/05_run_r100_diversity_all_datasets.sh` and `experiments/06_run_mquake_beam_cap512.sh`.
+
+Local validation:
+
+- 27/27 `unittest` tests pass in `minerva_tf2`;
+- compile and shell syntax checks pass;
+- one-batch Kinship `R=100`, beam-width-100 smoke completed at `saved_models/kinshiphinton/20260829_014259/rate_sweep`;
+- external beam and pinned upstream beam match exactly on that batch: Hits@1 `0.96875`, MRR `0.98046875`;
+- the beam smoke records mean `9.1875` unique terminal candidates/question, candidate coverage `1.0`, null coding-message fields, and zero stochastic-action payload;
+- an exact pre-change Kinship `R=1` smoke comparison gives zero deltas for legacy greedy, Top-2, NumPy, and `tf_policy` utility/path/communication fields;
+- checkpoint identity remained unchanged and the submodule remains pinned at `9bf1ae998d14471c3f7c31f70969d0bbf9873329`.
+
+Pinned-upstream caveat: upstream beam always retains the requested width slots. When a state has fewer valid actions than the beam width, padded/very-low-score filler branches can be carried. The implementation preserves this behavior for regression compatibility and measures actual distinct terminal candidates; beam width 100 must not be described as 100 unique valid paths or as compute-free.
+
+Remaining definition-of-done items are the user-run full seed-42 four-dataset matrix, MQuAKE cap-512 sensitivity, uniform NumPy `R=100` empirical rows, canonical result-tracker update with exact artifacts, and manuscript interpretation after those results exist.

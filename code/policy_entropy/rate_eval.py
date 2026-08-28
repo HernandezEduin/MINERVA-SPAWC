@@ -120,6 +120,47 @@ def minerva_max_pool_metrics(
     }
 
 
+def candidate_diversity_metrics(
+    final_entities: np.ndarray,
+    answer_hits: np.ndarray,
+    reciprocal_ranks: np.ndarray,
+) -> Dict[str, np.ndarray]:
+    """Return per-question candidate diversity and answer-coverage diagnostics."""
+    final_entities = np.asarray(final_entities)
+    answer_hits = np.asarray(answer_hits, dtype=bool)
+    reciprocal_ranks = np.asarray(reciprocal_ranks, dtype=np.float64)
+    if final_entities.ndim != 2 or answer_hits.shape != final_entities.shape:
+        raise ValueError("final_entities and answer_hits must share shape [B, C].")
+    if reciprocal_ranks.shape != (final_entities.shape[0],):
+        raise ValueError("reciprocal_ranks must contain one value per question.")
+
+    candidate_count = np.full(
+        final_entities.shape[0], final_entities.shape[1], dtype=np.int64
+    )
+    unique_counts = np.asarray(
+        [np.unique(row).size for row in final_entities], dtype=np.int64
+    )
+    coverage = answer_hits.any(axis=1)
+    conditional_rr = np.where(coverage, reciprocal_ranks, np.nan)
+    unique_correct_counts = np.asarray(
+        [
+            np.unique(entities[hits]).size
+            for entities, hits in zip(final_entities, answer_hits)
+        ],
+        dtype=np.int64,
+    )
+    return {
+        "candidate_count": candidate_count,
+        "unique_terminal_candidate_count": unique_counts,
+        "unique_terminal_fraction": unique_counts / candidate_count,
+        "any_answer_candidate": coverage,
+        "candidate_answer_coverage": coverage,
+        "reciprocal_rank_given_coverage": conditional_rr,
+        "unique_correct_terminal_candidate_count": unique_correct_counts,
+        "correct_rollouts_per_question": answer_hits.sum(axis=1),
+    }
+
+
 def recover_raw_action_counts(grapher: Any) -> Tuple[Optional[np.ndarray], Dict[str, Any]]:
     """Recover pre-cap action counts and validate them against the grapher's array store.
 
@@ -251,6 +292,186 @@ def _path_metric_arrays(
             )
 
     return path_edit_distance, relation_edit_distance
+
+
+def select_deterministic_beam_expansions(
+    cumulative_action_scores: np.ndarray,
+    batch_size: int,
+    beam_width: int,
+    max_num_actions: int,
+    first_step: bool,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Mirror pinned ``TrainerNLQ.test(..., beam=True)`` beam pruning.
+
+    Returns global parent-beam rows and local action indices. NumPy's default
+    ``argsort`` ordering is intentional because the pinned upstream code uses it.
+    """
+    scores = np.asarray(cumulative_action_scores, dtype=np.float64)
+    expected = (batch_size * beam_width, max_num_actions)
+    if scores.shape != expected:
+        raise ValueError(f"Beam scores must have shape {expected}; received {scores.shape}.")
+    if beam_width < 1 or beam_width > max_num_actions:
+        raise ValueError("beam_width must lie in [1, max_num_actions].")
+
+    question_offsets = np.repeat(np.arange(batch_size) * beam_width, beam_width)
+    if first_step:
+        ranked_actions = np.argsort(scores)[:, -beam_width:]
+        rank_within_top = np.tile(np.arange(beam_width), batch_size)
+        action_idx = ranked_actions[
+            np.arange(batch_size * beam_width), rank_within_top
+        ]
+        parent_rows = question_offsets
+    else:
+        expanded = scores.reshape(batch_size, beam_width * max_num_actions)
+        flat_idx = np.argsort(expanded, axis=1)[:, -beam_width:].reshape(-1)
+        parent_rows = flat_idx // max_num_actions + question_offsets
+        action_idx = flat_idx % max_num_actions
+    return parent_rows.astype(np.int64), action_idx.astype(np.int32)
+
+
+def collect_deterministic_beam_single_episode(
+    trainer: Any,
+    sess: Any,
+    episode: Any,
+    raw_action_counts: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """Run one episode with the pinned upstream deterministic beam semantics."""
+    batch_size = episode.no_examples
+    beam_width = int(episode.num_rollouts)
+    horizon = trainer.path_length
+    flat_size = batch_size * beam_width
+    if beam_width > trainer.max_num_actions:
+        raise ValueError("Effective beam width cannot exceed max_num_actions.")
+
+    state = episode.get_state()
+    mem_shape = trainer.agent.get_mem_shape()
+    agent_mem = np.zeros(
+        (mem_shape[0], mem_shape[1], flat_size, mem_shape[3]), dtype=np.float32
+    )
+    previous_relation = np.full(
+        flat_size, trainer.relation_vocab["DUMMY_START_RELATION"], dtype=np.int64
+    )
+    constant_feed = {
+        trainer.range_arr: np.arange(flat_size, dtype=np.int32),
+        trainer.question_embedding: episode.get_question_embedding(),
+    }
+
+    beam_scores = np.zeros((flat_size, 1), dtype=np.float64)
+    per_step = defaultdict(list)
+    entity_history = []
+    relation_history = []
+
+    for step in range(horizon):
+        feed_dict = {
+            **constant_feed,
+            trainer.next_relations: state["next_relations"],
+            trainer.next_entities: state["next_entities"],
+            trainer.current_entities: state["current_entities"],
+            trainer.prev_state: agent_mem,
+            trainer.prev_relation: previous_relation,
+        }
+        agent_mem, policy_log_probs = sess.run(
+            [trainer.test_state, trainer.test_logits], feed_dict=feed_dict
+        )
+        policy_log_probs = np.asarray(policy_log_probs, dtype=np.float64)
+        expanded_scores = policy_log_probs + beam_scores
+        parent_rows, action_idx = select_deterministic_beam_expansions(
+            expanded_scores,
+            batch_size=batch_size,
+            beam_width=beam_width,
+            max_num_actions=trainer.max_num_actions,
+            first_step=step == 0,
+        )
+
+        state["current_entities"] = state["current_entities"][parent_rows]
+        state["next_relations"] = state["next_relations"][parent_rows, :]
+        state["next_entities"] = state["next_entities"][parent_rows, :]
+        agent_mem = agent_mem[:, :, parent_rows, :]
+        if trainer.use_stop_signal:
+            episode.stopped_mask = episode.stopped_mask[parent_rows]
+            episode.stop_steps = episode.stop_steps[parent_rows]
+        if trainer.use_restart_signal:
+            episode.restarted_mask = episode.restarted_mask[parent_rows]
+
+        for history_step in range(len(entity_history)):
+            entity_history[history_step] = entity_history[history_step][parent_rows]
+            relation_history[history_step] = relation_history[history_step][parent_rows]
+        for values in per_step.values():
+            for history_step in range(len(values)):
+                values[history_step] = values[history_step][parent_rows]
+
+        entity_history.append(np.asarray(state["current_entities"]).copy())
+        chosen_relation = state["next_relations"][np.arange(flat_size), action_idx]
+        relation_history.append(np.asarray(chosen_relation).copy())
+        per_step["valid_action_counts"].append(
+            episode.count_valid_action(
+                state["next_entities"], state["next_relations"]
+            )
+        )
+        per_step["original_policy_entropy_bits"].append(
+            entropy_bits_from_normalized_log_probs(policy_log_probs)[parent_rows]
+        )
+        if raw_action_counts is not None:
+            raw_counts = raw_action_counts[
+                np.asarray(state["current_entities"], dtype=np.int64)
+            ]
+            per_step["raw_action_counts"].append(raw_counts)
+            per_step["action_cap_truncated"].append(
+                raw_counts > trainer.max_num_actions
+            )
+
+        beam_scores = expanded_scores[parent_rows, action_idx].reshape(-1, 1)
+        previous_relation = chosen_relation
+        state = episode(action_idx)
+
+    entity_history.append(np.asarray(state["current_entities"]).copy())
+    _, answer_hits_flat = episode.get_reward()
+    answer_hits = np.asarray(answer_hits_flat, dtype=bool).reshape(
+        batch_size, beam_width
+    )
+    final_entities = np.asarray(state["current_entities"]).reshape(
+        batch_size, beam_width
+    )
+    path_log_prob = beam_scores.reshape(batch_size, beam_width)
+
+    result: Dict[str, Any] = {
+        key: _reshape_step(values, batch_size, beam_width)
+        for key, values in per_step.items()
+    }
+    result.update(
+        {
+            "final_entities": final_entities,
+            "answer_hits": answer_hits,
+            "path_log_prob": path_log_prob,
+            "gold_hops": np.asarray(
+                [episode.get_path_length(idx) for idx in range(batch_size)],
+                dtype=np.int64,
+            ),
+            "entity_trajectory": np.stack(entity_history, axis=1).reshape(
+                batch_size, beam_width, horizon + 1
+            ),
+            "relation_trajectory": np.stack(relation_history, axis=1).reshape(
+                batch_size, beam_width, horizon
+            ),
+        }
+    )
+    ranking = minerva_max_pool_metrics(final_entities, answer_hits, path_log_prob)
+    result.update(ranking)
+    result.update(
+        candidate_diversity_metrics(
+            final_entities, answer_hits, ranking["reciprocal_ranks"]
+        )
+    )
+    path_ed, relation_ed = _path_metric_arrays(
+        trainer,
+        episode,
+        result["entity_trajectory"],
+        result["relation_trajectory"],
+        ranking["sorted_indices"],
+    )
+    result["path_edit_distance"] = path_ed
+    result["relation_edit_distance"] = relation_ed
+    return result
 
 
 def collect_rate_single_episode(
@@ -430,6 +651,11 @@ def collect_rate_single_episode(
 
     ranking = minerva_max_pool_metrics(final_entities, answer_hits, path_log_prob)
     result.update(ranking)
+    result.update(
+        candidate_diversity_metrics(
+            final_entities, answer_hits, ranking["reciprocal_ranks"]
+        )
+    )
     path_ed, relation_ed = _path_metric_arrays(
         trainer,
         episode,
@@ -505,12 +731,27 @@ def evaluate_rate_mode(
     raw_action_metadata: Optional[Dict[str, Any]] = None,
     mode: str = "test",
     max_batches: Optional[int] = None,
+    beam_width: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Stream a complete evaluation split and return one common summary row."""
+    valid_modes = {"tf_policy", "greedy", "topk", "numpy_policy", "deterministic_beam"}
+    if action_mode not in valid_modes:
+        raise ValueError(f"Unknown rate evaluation mode: {action_mode}.")
+    requested_beam_width = None
+    effective_rollouts = int(trainer.test_rollouts)
+    if action_mode == "deterministic_beam":
+        requested_beam_width = (
+            int(trainer.test_rollouts) if beam_width is None else int(beam_width)
+        )
+        if requested_beam_width < 1:
+            raise ValueError("beam_width must be a positive integer.")
+        effective_rollouts = min(requested_beam_width, int(trainer.max_num_actions))
+
     trainer.environment.change_mode(mode)
-    trainer.environment.change_test_rollouts(trainer.test_rollouts)
-    rng = np.random.default_rng(seed)
+    trainer.environment.change_test_rollouts(effective_rollouts)
+    rng = None if action_mode == "deterministic_beam" else np.random.default_rng(seed)
     accumulator = _MeanAccumulator()
+    unique_terminal_counts = []
     question_count = 0
     per_hop_truncated = np.zeros(trainer.path_length, dtype=np.float64)
     per_hop_visited = np.zeros(trainer.path_length, dtype=np.int64)
@@ -526,16 +767,24 @@ def evaluate_rate_mode(
     ):
         if max_batches is not None and batch_idx >= max_batches:
             break
-        batch = collect_rate_single_episode(
-            trainer=trainer,
-            sess=sess,
-            episode=episode,
-            action_mode=action_mode,
-            top_k=top_k,
-            rng=rng,
-            relation_prior=relation_prior,
-            raw_action_counts=raw_action_counts,
-        )
+        if action_mode == "deterministic_beam":
+            batch = collect_deterministic_beam_single_episode(
+                trainer=trainer,
+                sess=sess,
+                episode=episode,
+                raw_action_counts=raw_action_counts,
+            )
+        else:
+            batch = collect_rate_single_episode(
+                trainer=trainer,
+                sess=sess,
+                episode=episode,
+                action_mode=action_mode,
+                top_k=top_k,
+                rng=rng,
+                relation_prior=relation_prior,
+                raw_action_counts=raw_action_counts,
+            )
         question_count += int(batch["final_entities"].shape[0])
 
         direct_metrics = {
@@ -575,10 +824,18 @@ def evaluate_rate_mode(
             "mean_path_task_agnostic_shannon_gold_hops_bits": "path_task_agnostic_shannon_gold_hops_bits",
             "ped": "path_edit_distance",
             "relation_edit_distance": "relation_edit_distance",
+            "mean_candidate_count": "candidate_count",
+            "mean_unique_terminal_candidates": "unique_terminal_candidate_count",
+            "mean_unique_terminal_fraction": "unique_terminal_fraction",
+            "candidate_answer_coverage": "candidate_answer_coverage",
+            "mrr_given_answer_coverage": "reciprocal_rank_given_coverage",
+            "mean_unique_correct_terminal_candidates": "unique_correct_terminal_candidate_count",
+            "mean_correct_rollouts_per_question": "correct_rollouts_per_question",
         }
         for output_name, batch_key in direct_metrics.items():
             if batch_key in batch:
                 accumulator.add(output_name, batch[batch_key])
+        unique_terminal_counts.append(batch["unique_terminal_candidate_count"])
 
         accumulator.add("hits_at_1", batch["hits_at_1"])
         accumulator.add("mrr", batch["reciprocal_ranks"])
@@ -592,8 +849,13 @@ def evaluate_rate_mode(
             "path_shannon_code": "path_shannon_code_fixed_horizon_bits",
         }
         for output_stem, batch_key in conditional_sources.items():
-            accumulator.add(f"success_mean_{output_stem}_bits", batch[batch_key], success_mask)
-            accumulator.add(f"failure_mean_{output_stem}_bits", batch[batch_key], failure_mask)
+            if batch_key in batch:
+                accumulator.add(
+                    f"success_mean_{output_stem}_bits", batch[batch_key], success_mask
+                )
+                accumulator.add(
+                    f"failure_mean_{output_stem}_bits", batch[batch_key], failure_mask
+                )
 
         if "action_cap_truncated" in batch:
             accumulator.add("truncated_state_fraction", batch["action_cap_truncated"])
@@ -622,12 +884,19 @@ def evaluate_rate_mode(
         "top_k": int(top_k) if top_k is not None else None,
         "nominal_budget_bits": nominal_budget,
         "num_questions": int(question_count),
-        "num_rollouts": int(trainer.test_rollouts),
+        "num_rollouts": int(effective_rollouts),
+        "requested_test_rollouts": int(trainer.test_rollouts),
+        "requested_beam_width": requested_beam_width,
+        "effective_beam_width": (
+            int(effective_rollouts) if action_mode == "deterministic_beam" else None
+        ),
         "path_length": int(trainer.path_length),
         "seed": int(seed),
         "sampling_backend": (
             "deterministic argmax"
             if action_mode == "greedy"
+            else "deterministic pinned-MINERVA beam mirror (NumPy argsort)"
+            if action_mode == "deterministic_beam"
             else "numpy.random.default_rng (PCG64)"
             if action_mode in {"topk", "numpy_policy"}
             else "upstream TensorFlow categorical"
@@ -635,6 +904,12 @@ def evaluate_rate_mode(
         "action_payload_interpretation": (
             "0 bits/hop with synchronized side information"
             if action_mode == "greedy"
+            else (
+                "0 incremental stochastic action-realization payload under synchronized "
+                "policy/state/action ordering and deterministic tie-breaking; computation "
+                "and candidate-search costs are not zero"
+            )
+            if action_mode == "deterministic_beam"
             else "fixed local rank within retained support"
             if action_mode == "topk"
             else "unrestricted pretrained NumPy policy"
@@ -649,6 +924,13 @@ def evaluate_rate_mode(
         "ped",
         "relation_edit_distance",
         "rollout_success_rate",
+        "mean_candidate_count",
+        "mean_unique_terminal_candidates",
+        "mean_unique_terminal_fraction",
+        "candidate_answer_coverage",
+        "mrr_given_answer_coverage",
+        "mean_unique_correct_terminal_candidates",
+        "mean_correct_rollouts_per_question",
         "mean_valid_actions",
         "mean_effective_support",
         "mean_fixed_budget_bits",
@@ -689,8 +971,20 @@ def evaluate_rate_mode(
         "mean_retained_count_for_truncated_states",
     ]
     summary.update({name: accumulator.mean(name) for name in output_metrics})
+    summary["median_unique_terminal_candidates"] = (
+        float(np.median(np.concatenate(unique_terminal_counts)))
+        if unique_terminal_counts
+        else None
+    )
 
-    is_single_trajectory = trainer.test_rollouts == 1
+    if action_mode in {"greedy", "deterministic_beam"}:
+        summary["mean_question_stochastic_action_payload_bits"] = 0.0
+    else:
+        summary["mean_question_stochastic_action_payload_bits"] = summary[
+            "mean_question_fixed_rank_bits"
+        ]
+
+    is_single_trajectory = effective_rollouts == 1
     summary["single_rollout_success_rate"] = (
         summary["rollout_success_rate"] if is_single_trajectory else None
     )
@@ -709,6 +1003,13 @@ def evaluate_rate_mode(
         summary["mrr"], summary["hits_at_1"], atol=1e-12
     ):
         raise RuntimeError("Greedy protocol invariant failed: MRR != Hits@1.")
+    if action_mode == "greedy":
+        if not np.isclose(summary["mean_unique_terminal_candidates"], 1.0, atol=1e-12):
+            raise RuntimeError("Greedy diversity invariant failed: unique candidates != 1.")
+        if not np.isclose(
+            summary["candidate_answer_coverage"], summary["hits_at_1"], atol=1e-12
+        ):
+            raise RuntimeError("Greedy diversity invariant failed: coverage != Hits@1.")
 
     # Compatibility aliases requested by the brief's minimum common schema.
     summary["mean_path_surprisal_bits"] = summary["mean_path_surprisal_fixed_horizon_bits"]

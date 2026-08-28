@@ -318,3 +318,11 @@ Safe summary:
 - **Core experimental status:** COMPLETE
 - **Additional core experiments required:** NO
 - **Next phase:** ICASSP manuscript revision
+
+## 12. Post-review deterministic-diversity experiments pending — 2026-08-29
+
+The Section 11 verdict is retained as the historical conclusion of the 2026-08-28 campaign, but its statement that no additional core experiment was required is **superseded** by an independent manuscript/reviewer concern: multiple candidates may be generated deterministically by synchronized beam decoding with zero incremental stochastic action-realization payload.
+
+Evaluation support and CPU launchers are implemented at root HEAD `5a1d29aeac6cfde3ad55f6b723000db433511812`, with MINERVA still pinned at `9bf1ae998d14471c3f7c31f70969d0bbf9873329`. The planned seed-42 `R=100` comparison is greedy / Top-2 / Top-4 / NumPy unrestricted / deterministic beam-100 on Kinship, MetaQA, MQuAKE-ST Single, and MQuAKE-ST Multi, followed by the evaluation-only MQuAKE cap-512 sensitivity.
+
+No full post-review result is recorded yet. A one-batch Kinship validation artifact exists at `saved_models/kinshiphinton/20260829_014259/rate_sweep`; its external beam Hits@1/MRR (`0.96875` / `0.98046875`) matches pinned upstream beam exactly, but this smoke result must not be used as a full-dataset scientific conclusion. After the user runs `experiments/05_run_r100_diversity_all_datasets.sh` and `experiments/06_run_mquake_beam_cap512.sh`, append exact artifact paths, metrics, diversity/coverage decomposition, cap sensitivity, and the Case A/B/C interpretation here.

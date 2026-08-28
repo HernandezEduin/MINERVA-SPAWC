@@ -53,6 +53,10 @@ def preparse_rate_arguments(argv: List[str]) -> Tuple[argparse.Namespace, List[s
     )
     parser.add_argument("--rate_include_unrestricted", type=_str2bool, default=True)
     parser.add_argument("--rate_include_numpy_policy", type=_str2bool, default=False)
+    parser.add_argument(
+        "--rate_include_deterministic_beam", type=_str2bool, default=False
+    )
+    parser.add_argument("--rate_beam_width", type=int, default=None)
     parser.add_argument("--rate_seed", type=int, default=42)
     parser.add_argument("--rate_test_rollouts", type=int, default=None)
     parser.add_argument("--rate_max_num_actions_override", type=int, default=None)
@@ -77,6 +81,8 @@ def preparse_rate_arguments(argv: List[str]) -> Tuple[argparse.Namespace, List[s
         parser.error("--rate_max_batches must be positive when provided.")
     if rate_args.rate_test_rollouts is not None and rate_args.rate_test_rollouts < 1:
         parser.error("--rate_test_rollouts must be positive when provided.")
+    if rate_args.rate_beam_width is not None and rate_args.rate_beam_width < 1:
+        parser.error("--rate_beam_width must be positive when provided.")
     if (
         rate_args.rate_max_num_actions_override is not None
         and rate_args.rate_max_num_actions_override < 1
@@ -252,6 +258,8 @@ def main() -> None:
             requested_modes.extend(("topk", top_k) for top_k in rate_args.rate_top_k)
             if rate_args.rate_include_numpy_policy:
                 requested_modes.append(("numpy_policy", None))
+            if rate_args.rate_include_deterministic_beam:
+                requested_modes.append(("deterministic_beam", None))
             if rate_args.rate_include_unrestricted:
                 # Keep upstream TensorFlow sampling as the P0 regression reference.
                 requested_modes.append(("tf_policy", None))
@@ -268,6 +276,7 @@ def main() -> None:
                     raw_action_metadata=raw_action_metadata,
                     mode="test",
                     max_batches=rate_args.rate_max_batches,
+                    beam_width=rate_args.rate_beam_width,
                 )
                 summary["dataset"] = _dataset_name(options)
                 summary.update(
@@ -284,14 +293,20 @@ def main() -> None:
                     summary["rate_label"] = f"K={top_k}"
                 elif action_mode == "numpy_policy":
                     summary["rate_label"] = "unrestricted NumPy"
+                elif action_mode == "deterministic_beam":
+                    summary["rate_label"] = (
+                        f"deterministic beam (width={summary['effective_beam_width']})"
+                    )
                 else:
                     summary["rate_label"] = "unrestricted"
                 summaries.append(summary)
                 logger.info(
-                    "Rate result %s: Hits@1=%s MRR=%s PED=%s",
+                    "Rate result %s: Hits@1=%s MRR=%s coverage=%s unique=%s PED=%s",
                     summary["rate_label"],
                     summary["hits_at_1"],
                     summary["mrr"],
+                    summary["candidate_answer_coverage"],
+                    summary["mean_unique_terminal_candidates"],
                     summary["ped"],
                 )
 
@@ -337,6 +352,22 @@ def main() -> None:
             "greedy_unrestricted_comparison": comparison,
             "scientific_notes": {
                 "greedy_zero_payload": "Requires synchronized policy, state/task, action set, and ordering.",
+                "deterministic_beam": (
+                    "Evaluation-only mirror of pinned TrainerNLQ beam pruning and MAX-pool "
+                    "ranking. It uses cumulative policy log-probability and NumPy's default "
+                    "argsort tie behavior. Upstream always retains the requested width slots, "
+                    "so padded/filler branches can occur when local valid degree is smaller."
+                ),
+                "deterministic_beam_zero_payload": (
+                    "Zero incremental stochastic action-realization payload under identical "
+                    "policy/state/action interface/order and deterministic tie-breaking; this "
+                    "does not mean zero computation or zero total system communication."
+                ),
+                "candidate_diagnostics": (
+                    "Distinct terminal entities, answer presence, unique fraction, and sampled-"
+                    "candidate reciprocal rank conditional on answer coverage are computed per "
+                    "question for every execution mode."
+                ),
                 "topk_budget": "A hard retained-support/local-rank bound, not entropy-coded traffic.",
                 "sampling_backend": (
                     "Top-K and numpy_policy each initialize the same seeded NumPy PCG64 "
