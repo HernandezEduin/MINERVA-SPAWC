@@ -4,7 +4,7 @@
 **Default branch when inspected:** `master`  
 **MINERVA submodule commit when inspected:** `9bf1ae998d14471c3f7c31f70969d0bbf9873329`  
 **Prepared:** 2026-08-27  
-**Updated:** 2026-08-28 after the first full four-dataset rate sweeps  
+**Updated:** 2026-08-28 after completion of the no-retraining follow-up experiments
 **Scope:** Evaluation-only changes. **Do not retrain MINERVA. Do not modify pretrained checkpoints.**
 
 ---
@@ -29,7 +29,7 @@ Using the **existing pretrained checkpoints**, add evaluation functionality that
 
 The primary deliverable is a **rate/budget vs. task-performance evaluation** for the current pretrained policies.
 
-> **Post-P0 status:** The first full sweeps did **not** show a meaningful Hits@1-vs-rate trade-off. Greedy/K=1 preserved unrestricted Hits@1 on all four evaluated settings. The next implementation task is therefore to separate single-trajectory utility/cost from MINERVA's 100-rollout candidate-ranking utility/cost, add a matched NumPy unrestricted sampler, and test action-cap sensitivity. See Sections 29–32.
+> **Final no-retraining status:** P0 and the follow-up implementation and experiments are complete. The evaluator supports explicit `R=1` execution, total per-question communication for `R>1` ensembles, backend-matched `numpy_policy` sampling, and evaluation-only action-cap overrides. MQuAKE cap sensitivity and five-seed Kinship and MetaQA `R=100` studies are complete. No further core experiment is currently required. Detailed artifact paths and quantitative results are tracked in `codex_ref/infocost_experiment_results_20260828.md`.
 
 ---
 
@@ -1345,7 +1345,9 @@ This is expected, not an evaluator bug.
 
 ## 31. Immediate follow-up implementation plan
 
-This is the next task for Codex. Keep it evaluation-only and additive.
+> **Status: COMPLETE.** This section preserves the historical follow-up plan that was subsequently implemented and evaluated. See Sections 33–36 and `codex_ref/infocost_experiment_results_20260828.md` for the final status and results.
+
+The planned work was evaluation-only and additive.
 
 ### Priority 1 — add an explicit evaluation-rollout override
 
@@ -1690,7 +1692,9 @@ The follow-up is complete when:
 
 ### Do not do yet
 
-Until the above is complete:
+> **Historical condition, now superseded:** The restrictions below applied while the follow-up was unfinished. The follow-up definition of done has now been satisfied; current guidance is in Sections 33–36.
+
+Until the above was complete:
 
 - do not rewrite the manuscript around MetaQA MRR;
 - do not claim `K=2` gives the MRR gain for only `1 bit/hop` without ensemble-cost qualification;
@@ -1700,3 +1704,95 @@ Until the above is complete:
 - do not add communication-aware training.
 
 The purpose of this follow-up is to make the **units of communication and utility operationally consistent** before the 4-page ICASSP manuscript is finalized.
+
+---
+
+## 33. Follow-up implementation completion — 2026-08-28
+
+The evaluation-only follow-up is complete:
+
+- an explicit evaluation-rollout override supports `R=1` without YAML changes;
+- total per-question communication sums costs over all `R` rollouts and `T` hops;
+- backend-matched `numpy_policy` sampling is available while `tf_policy` remains the regression reference;
+- an evaluation-only `max_num_actions` override supports checkpoint-compatible cap sensitivity;
+- all 22 pure-Python `unittest` tests passed in the `minerva_tf2` Conda environment;
+- Python compilation, shell syntax, and `git diff --check` checks passed;
+- the existing P0 `tf_policy` output remained numerically unchanged in its regression comparison;
+- no checkpoint, YAML configuration, dataset, manuscript, or MINERVA submodule source was modified;
+- checkpoint identities remained unchanged during evaluation.
+
+No retraining was performed. All Python execution, validation, and experiment commands used `minerva_tf2`.
+
+## 34. Completed experiment artifact index
+
+### Original full `R=100` rate sweeps
+
+| Dataset | Output directory |
+|---|---|
+| Kinship | `saved_models/kinshiphinton/20260827_191947` |
+| MQuAKE-ST Single | `saved_models/mquake_st/20260827_193842` |
+| MQuAKE-ST Multi | `saved_models/mquake_st/20260827_194422` |
+| MetaQA | `saved_models/metaqa/20260827_194812` |
+
+### Stage 1 — `R=1` single-trajectory evaluation
+
+| Dataset | Output directory |
+|---|---|
+| Kinship | `saved_models/kinshiphinton/20260828_015559` |
+| MQuAKE-ST Single | `saved_models/mquake_st/20260828_020226` |
+| MQuAKE-ST Multi | `saved_models/mquake_st/20260828_020333` |
+| MetaQA | `saved_models/metaqa/20260828_020631` |
+
+### Stage 2 — MQuAKE evaluation-time cap 512 sensitivity
+
+| Dataset | R | Output directory |
+|---|---:|---|
+| MQuAKE-ST Single | 1 | `saved_models/mquake_st/20260828_021451` |
+| MQuAKE-ST Multi | 1 | `saved_models/mquake_st/20260828_021656` |
+| MQuAKE-ST Single | 100 | `saved_models/mquake_st/20260828_021815` |
+| MQuAKE-ST Multi | 100 | `saved_models/mquake_st/20260828_022724` |
+
+### Stage 3A — Kinship `R=100` multi-seed
+
+| Rate seed | Output directory |
+|---:|---|
+| 42 | `saved_models/kinshiphinton/20260828_021222` |
+| 43 | `saved_models/kinshiphinton/20260828_021248` |
+| 44 | `saved_models/kinshiphinton/20260828_021313` |
+| 45 | `saved_models/kinshiphinton/20260828_021339` |
+| 46 | `saved_models/kinshiphinton/20260828_021405` |
+
+### Stage 3B — MetaQA `R=100` multi-seed
+
+| Rate seed | Output directory |
+|---:|---|
+| 42 | `saved_models/metaqa/20260828_030323` |
+| 43 | `saved_models/metaqa/20260828_040427` |
+| 44 | `saved_models/metaqa/20260828_050525` |
+| 45 | `saved_models/metaqa/20260828_060604` |
+| 46 | `saved_models/metaqa/20260828_070659` |
+
+Every listed CSV, JSON, and metadata artifact was revalidated on 2026-08-28. Dataset, question count, configured/effective rollout count and cap, rate seed, modes, `use_beam=False`, `pool="max"`, checkpoint identity, raw-action maximum, and truncation diagnostics agree with the intended protocol. Full tables are in `codex_ref/infocost_experiment_results_20260828.md`.
+
+## 35. Final experimental conclusions
+
+1. `R=1` and `R=100` measure different operational utilities. For `R=1`, Hits@1 equals executed-trajectory success and communication is a per-path cost. For `R=100`, Hits@1/MRR are MINERVA sampled-rollout candidate-ranking metrics and communication must be totaled over the complete ensemble.
+2. Stochastic `R=1` execution provides no general success advantage. Kinship K=2 is the important exception: it improves from 97/101 to 99/101 at seed 42, while worsening PED/RED. MQuAKE and MetaQA stochastic modes slightly underperform greedy.
+3. `R=100` MRR is not conventional full-KG entity-ranking MRR. It ranks candidates sampled by the 100-rollout ensemble under MINERVA `pool="max"` semantics.
+4. Across five MetaQA rate seeds, greedy/K=2/K=4/NumPy Hits@1 are approximately 0.897910/0.897782/0.897859/0.897792—only a few questions apart among 39,093—while stochastic MRR improves by about 0.030–0.032. K=2 recovers 93.103% ± 0.344% of the NumPy MRR gain and K=4 recovers 99.486% ± 0.062% (population SD). Total fixed-rank costs for the 100-rollout, three-hop ensemble are about 300, 568.8, and 1055.7 bits/question for K=2, K=4, and NumPy.
+5. Across five Kinship rate seeds, NumPy Hits@1 matches greedy in every seed. K=2/K=4 gain exactly one question in four of five seeds; this is not enough to establish inference regularization. Stochastic modes improve ensemble MRR but have worse PED/RED than greedy.
+6. MQuAKE cap 512 removes observed truncation because the maximum raw action count is 479. Single changes only slightly; Multi is materially cap-sensitive in its absolute baseline. Removing truncation does not reveal a stochastic-navigation advantage, and the policy remains near-deterministic. Cap 512 is only an evaluation sensitivity analysis because training used cap 200.
+7. The task-agnostic graph-structural prior is substantially more expensive than the task-conditioned policy.
+8. The evidence does not support a monotonic communication-versus-accuracy law.
+9. The strongest operational distinction is that communication needed for single/top-1 navigation utility is not the same as communication useful for ranked sampled-candidate utility.
+10. Greedy zero action payload is conditional on synchronized policy, task/state, candidate action set, and action ordering/tie-breaking. It is not a universal zero-communication theorem.
+
+## 36. Current project status
+
+- **Core no-retraining implementation:** complete.
+- **Core no-retraining experiments:** complete.
+- **Additional core experiments required:** no.
+- **Next phase:** ICASSP manuscript revision.
+- **Automatic experiment launch:** prohibited unless separately requested.
+- **Optional diagnostics:** explicit unique-terminal-candidate diversity could be informative but is not required for the current conclusions.
+- **Canonical quantitative tracker:** `codex_ref/infocost_experiment_results_20260828.md`.
