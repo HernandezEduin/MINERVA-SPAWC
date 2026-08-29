@@ -326,3 +326,248 @@ The Section 11 verdict is retained as the historical conclusion of the 2026-08-2
 Evaluation support and CPU launchers are implemented at root HEAD `5a1d29aeac6cfde3ad55f6b723000db433511812`, with MINERVA still pinned at `9bf1ae998d14471c3f7c31f70969d0bbf9873329`. The planned seed-42 `R=100` comparison is greedy / Top-2 / Top-4 / NumPy unrestricted / deterministic beam-100 on Kinship, MetaQA, MQuAKE-ST Single, and MQuAKE-ST Multi, followed by the evaluation-only MQuAKE cap-512 sensitivity.
 
 No full post-review result is recorded yet. A one-batch Kinship validation artifact exists at `saved_models/kinshiphinton/20260829_014259/rate_sweep`; its external beam Hits@1/MRR (`0.96875` / `0.98046875`) matches pinned upstream beam exactly, but this smoke result must not be used as a full-dataset scientific conclusion. After the user runs `experiments/05_run_r100_diversity_all_datasets.sh` and `experiments/06_run_mquake_beam_cap512.sh`, append exact artifact paths, metrics, diversity/coverage decomposition, cap sensitivity, and the Case A/B/C interpretation here.
+
+## 13. Post-review deterministic-diversity experiments — 2026-08-29
+
+This section resolves the pending experiment recorded in Section 12. It is self-contained and does not replace the historical results above.
+
+### 13.1 Motivation
+
+The experiment tests whether candidate diversity requires communicated stochastic action realization, or whether synchronized endpoints can obtain comparable ranking utility by running the same deterministic beam decoder. The tested beam uses the fixed pretrained policy, cumulative policy log probability, 100 retained beam slots, and the pinned MINERVA `pool="max"` ranking semantics. Under identical policy/state/local-action-interface/order/tie-breaking, its incremental stochastic action-realization payload is zero. This is not a claim of zero total communication or zero computation.
+
+### 13.2 Artifact index and protocol integrity
+
+| Campaign | Dataset | Questions | Configured → effective cap | Output directory |
+|---|---|---:|---:|---|
+| Primary | Kinship | 101 | 100 → 100 | `saved_models/kinshiphinton/20260829_030334` |
+| Primary | MetaQA | 39,093 | 200 → 200 | `saved_models/metaqa/20260829_030347` |
+| Primary | MQuAKE-ST Single / SA | 1,504 | 200 → 200 | `saved_models/mquake_st/20260829_042015` |
+| Primary | MQuAKE-ST Multi / MA | 870 | 200 → 200 | `saved_models/mquake_st/20260829_042415` |
+| Cap sensitivity | MQuAKE-ST Single / SA | 1,504 | 200 → 512 | `saved_models/mquake_st/20260829_030706` |
+| Cap sensitivity | MQuAKE-ST Multi / MA | 870 | 200 → 512 | `saved_models/mquake_st/20260829_031635` |
+
+All six CSV/JSON/metadata triplets were present and mutually consistent. Every run records root HEAD `6120683e8a0713db890f0b8b301a7dd9e034906a`, MINERVA SHA `9bf1ae998d14471c3f7c31f70969d0bbf9873329`, `R=100`, rate seed 42, the full question count, `pool="max"`, and the intended checkpoint. Checkpoint restore compatibility and unchanged checkpoint identity are true in every metadata file. All primary rows contain Greedy, Top-2, Top-4, NumPy unrestricted, and deterministic beam in that order. Beam requested/effective width is 100; every row has 100 logical candidate slots.
+
+The recorded checkpoint prefixes are `saved_models/kinshiphinton/qa_nhop_reason_3hop_seed42/model/model.ckpt`, `saved_models/metaqa/qa_nhop_reason_3hop_seed42/model/model.ckpt`, `saved_models/mquake_st/sa_qa_nhop_reason_4hop_seed42/model/model.ckpt`, and `saved_models/mquake_st/ma_qa_nhop_reason_4hop_seed42/model/model.ckpt`; recorded sizes match the current checkpoint files. Sampling backends are deterministic argmax for greedy, seeded NumPy PCG64 for Top-K/NumPy unrestricted, and the deterministic pinned-MINERVA beam mirror with default NumPy `argsort` for beam.
+
+The cap-512 runs use the same cap-200-trained SA/MA checkpoints, with configured cap 200 and evaluation-only effective cap 512. Maximum raw valid degree remains 479 and observed truncation becomes zero. These are sensitivity results, not retrained or full-action-trained models.
+
+Numerical checks passed: greedy MRR equals Hits@1; greedy terminal diversity is exactly one; greedy coverage equals Hits@1 and rollout success; coverage is never below Hits@1; candidate fractions are bounded; no unique count exceeds 100; Top-2 payload is approximately 300 bits/question for three-hop datasets and 400 for four-hop datasets; beam stochastic payload is zero; and beam fixed-rank, surprisal, Shannon, and execution-policy coding fields remain null. For beam, `rollout_success_rate` is the fraction of retained beam slots ending at an answer, not the success probability of a randomly sampled rollout.
+
+### 13.3 Compact cross-dataset scientific comparison
+
+All communication values in this table are total stochastic action-realization payload per question over the 100-slot, full-horizon protocol. NumPy is the full-support local-rank reference. Beam has no fixed-rank branch-message value; its displayed zero is only the explicitly emitted stochastic-realization payload.
+
+| Dataset | Mode | Hits@1 | MRR | Candidate coverage | Mean unique terminals | Stochastic payload/q |
+|---|---|---:|---:|---:|---:|---:|
+| Kinship | Greedy | 0.960396 | 0.960396 | 0.960396 | 1.000 | 0.000 |
+| Kinship | Top-2 | 0.970297 | 0.975248 | 0.980198 | 1.158 | 300.000 |
+| Kinship | Top-4 | 0.970297 | 0.980198 | 0.990099 | 1.257 | 600.000 |
+| Kinship | NumPy unrestricted | 0.960396 | 0.975248 | 0.990099 | 1.327 | 800.287 |
+| Kinship | Beam-100 | 0.960396 | 0.977723 | 1.000000 | 9.109 | 0.000 |
+| MetaQA | Greedy | 0.897910 | 0.897910 | 0.897910 | 1.000 | 0.000 |
+| MetaQA | Top-2 | 0.897782 | 0.928080 | 0.960965 | 1.849 | 300.000 |
+| MetaQA | Top-4 | 0.897859 | 0.929972 | 0.966234 | 2.562 | 568.814 |
+| MetaQA | NumPy unrestricted | 0.897782 | 0.930141 | 0.966899 | 3.329 | 1055.658 |
+| MetaQA | Beam-100 | 0.897782 | 0.942106 | 0.999130 | 57.978 | 0.000 |
+| MQuAKE-ST Single | Greedy | 0.886303 | 0.886303 | 0.886303 | 1.000 | 0.000 |
+| MQuAKE-ST Single | Top-2 | 0.886303 | 0.888298 | 0.890293 | 1.027 | 399.801 |
+| MQuAKE-ST Single | Top-4 | 0.886303 | 0.888298 | 0.890293 | 1.030 | 799.269 |
+| MQuAKE-ST Single | NumPy unrestricted | 0.886303 | 0.888298 | 0.890293 | 1.030 | 2115.297 |
+| MQuAKE-ST Single | Beam-100 | 0.886303 | 0.922135 | 0.994016 | 52.735 | 0.000 |
+| MQuAKE-ST Multi | Greedy | 0.856322 | 0.856322 | 0.856322 | 1.000 | 0.000 |
+| MQuAKE-ST Multi | Top-2 | 0.856322 | 0.860536 | 0.865517 | 1.055 | 399.744 |
+| MQuAKE-ST Multi | Top-4 | 0.856322 | 0.860536 | 0.865517 | 1.059 | 797.637 |
+| MQuAKE-ST Multi | NumPy unrestricted | 0.856322 | 0.860536 | 0.865517 | 1.059 | 2201.977 |
+| MQuAKE-ST Multi | Beam-100 | 0.856322 | 0.889130 | 0.977011 | 56.526 | 0.000 |
+
+### 13.4 Complete primary readouts
+
+The next two tables add the required rollout, correct-candidate, candidate-budget, and fixed-rank fields. `Mean correct slots` counts correct terminal slots among 100; `mean unique correct` counts distinct correct terminal entity IDs per question.
+
+| Dataset | Mode | Rollout success | MRR given coverage | Mean correct slots | Mean unique correct terminals |
+|---|---|---:|---:|---:|---:|
+| Kinship | Greedy | 0.960396 | 1.000000 | 96.040 | 0.960 |
+| Kinship | Top-2 | 0.966337 | 0.994949 | 96.634 | 0.980 |
+| Kinship | Top-4 | 0.965248 | 0.990000 | 96.525 | 0.990 |
+| Kinship | NumPy unrestricted | 0.962871 | 0.985000 | 96.287 | 0.990 |
+| Kinship | Beam-100 | 0.197327 | 0.977723 | 19.733 | 1.000 |
+| MetaQA | Greedy | 0.897910 | 1.000000 | 89.791 | 0.898 |
+| MetaQA | Top-2 | 0.895679 | 0.965779 | 89.568 | 1.588 |
+| MetaQA | Top-4 | 0.895019 | 0.962470 | 89.502 | 2.194 |
+| MetaQA | NumPy unrestricted | 0.894701 | 0.961983 | 89.470 | 2.893 |
+| MetaQA | Beam-100 | 0.267877 | 0.942926 | 26.788 | 7.332 |
+| MQuAKE-ST Single | Greedy | 0.886303 | 1.000000 | 88.630 | 0.886 |
+| MQuAKE-ST Single | Top-2 | 0.885246 | 0.997760 | 88.525 | 0.890 |
+| MQuAKE-ST Single | Top-4 | 0.885246 | 0.997760 | 88.525 | 0.890 |
+| MQuAKE-ST Single | NumPy unrestricted | 0.885246 | 0.997760 | 88.525 | 0.890 |
+| MQuAKE-ST Single | Beam-100 | 0.139621 | 0.927686 | 13.962 | 0.994 |
+| MQuAKE-ST Multi | Greedy | 0.856322 | 1.000000 | 85.632 | 0.856 |
+| MQuAKE-ST Multi | Top-2 | 0.854793 | 0.994245 | 85.479 | 0.872 |
+| MQuAKE-ST Multi | Top-4 | 0.854805 | 0.994245 | 85.480 | 0.874 |
+| MQuAKE-ST Multi | NumPy unrestricted | 0.854805 | 0.994245 | 85.480 | 0.874 |
+| MQuAKE-ST Multi | Beam-100 | 0.163391 | 0.910050 | 16.339 | 2.476 |
+
+| Dataset | Mode | Candidate slots | Beam width | Mean / median unique | Unique fraction | Fixed-rank bits/q | Stochastic payload/q | Truncation |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Kinship | Greedy | 100 | — | 1.000 / 1 | 0.010000 | 0.000 | 0.000 | 0.000% |
+| Kinship | Top-2 | 100 | — | 1.158 / 1 | 0.011584 | 300.000 | 300.000 | 0.000% |
+| Kinship | Top-4 | 100 | — | 1.257 / 1 | 0.012574 | 600.000 | 600.000 | 0.000% |
+| Kinship | NumPy unrestricted | 100 | — | 1.327 / 1 | 0.013267 | 800.287 | 800.287 | 0.000% |
+| Kinship | Beam-100 | 100 | 100 | 9.109 / 10 | 0.091089 | — | 0.000 | 0.000% |
+| MetaQA | Greedy | 100 | — | 1.000 / 1 | 0.010000 | 0.000 | 0.000 | 1.917% |
+| MetaQA | Top-2 | 100 | — | 1.849 / 2 | 0.018495 | 300.000 | 300.000 | 1.917% |
+| MetaQA | Top-4 | 100 | — | 2.562 / 2 | 0.025622 | 568.814 | 568.814 | 1.917% |
+| MetaQA | NumPy unrestricted | 100 | — | 3.329 / 2 | 0.033292 | 1055.658 | 1055.658 | 1.917% |
+| MetaQA | Beam-100 | 100 | 100 | 57.978 / 63 | 0.579776 | — | 0.000 | 7.905% |
+| MQuAKE-ST Single | Greedy | 100 | — | 1.000 / 1 | 0.010000 | 0.000 | 0.000 | 5.170% |
+| MQuAKE-ST Single | Top-2 | 100 | — | 1.027 / 1 | 0.010266 | 399.801 | 399.801 | 5.147% |
+| MQuAKE-ST Single | Top-4 | 100 | — | 1.030 / 1 | 0.010299 | 799.269 | 799.269 | 5.147% |
+| MQuAKE-ST Single | NumPy unrestricted | 100 | — | 1.030 / 1 | 0.010299 | 2115.297 | 2115.297 | 5.147% |
+| MQuAKE-ST Single | Beam-100 | 100 | 100 | 52.735 / 52 | 0.527347 | — | 0.000 | 9.352% |
+| MQuAKE-ST Multi | Greedy | 100 | — | 1.000 / 1 | 0.010000 | 0.000 | 0.000 | 18.391% |
+| MQuAKE-ST Multi | Top-2 | 100 | — | 1.055 / 1 | 0.010552 | 399.744 | 399.744 | 18.377% |
+| MQuAKE-ST Multi | Top-4 | 100 | — | 1.059 / 1 | 0.010586 | 797.637 | 797.637 | 18.377% |
+| MQuAKE-ST Multi | NumPy unrestricted | 100 | — | 1.059 / 1 | 0.010586 | 2201.977 | 2201.977 | 18.377% |
+| MQuAKE-ST Multi | Beam-100 | 100 | 100 | 56.526 / 56 | 0.565264 | — | 0.000 | 16.570% |
+
+### 13.5 Candidate-diversity and answer-coverage diagnostics
+
+Beam width 100 means 100 retained beam slots, not 100 unique valid paths. Low-degree states can retain repeated/filler low-score branches under the pinned implementation. Actual diversity is therefore described only by the measured terminal quantities below.
+
+| Dataset | Mode | Candidate coverage | Mean unique | Median unique | Unique fraction | MRR given coverage |
+|---|---|---:|---:|---:|---:|---:|
+| Kinship | Greedy | 0.960396 | 1.000 | 1 | 0.010000 | 1.000000 |
+| Kinship | Top-2 | 0.980198 | 1.158 | 1 | 0.011584 | 0.994949 |
+| Kinship | Top-4 | 0.990099 | 1.257 | 1 | 0.012574 | 0.990000 |
+| Kinship | NumPy unrestricted | 0.990099 | 1.327 | 1 | 0.013267 | 0.985000 |
+| Kinship | Beam-100 | 1.000000 | 9.109 | 10 | 0.091089 | 0.977723 |
+| MetaQA | Greedy | 0.897910 | 1.000 | 1 | 0.010000 | 1.000000 |
+| MetaQA | Top-2 | 0.960965 | 1.849 | 2 | 0.018495 | 0.965779 |
+| MetaQA | Top-4 | 0.966234 | 2.562 | 2 | 0.025622 | 0.962470 |
+| MetaQA | NumPy unrestricted | 0.966899 | 3.329 | 2 | 0.033292 | 0.961983 |
+| MetaQA | Beam-100 | 0.999130 | 57.978 | 63 | 0.579776 | 0.942926 |
+| MQuAKE-ST Single | Greedy | 0.886303 | 1.000 | 1 | 0.010000 | 1.000000 |
+| MQuAKE-ST Single | Top-2 | 0.890293 | 1.027 | 1 | 0.010266 | 0.997760 |
+| MQuAKE-ST Single | Top-4 | 0.890293 | 1.030 | 1 | 0.010299 | 0.997760 |
+| MQuAKE-ST Single | NumPy unrestricted | 0.890293 | 1.030 | 1 | 0.010299 | 0.997760 |
+| MQuAKE-ST Single | Beam-100 | 0.994016 | 52.735 | 52 | 0.527347 | 0.927686 |
+| MQuAKE-ST Multi | Greedy | 0.856322 | 1.000 | 1 | 0.010000 | 1.000000 |
+| MQuAKE-ST Multi | Top-2 | 0.865517 | 1.055 | 1 | 0.010552 | 0.994245 |
+| MQuAKE-ST Multi | Top-4 | 0.865517 | 1.059 | 1 | 0.010586 | 0.994245 |
+| MQuAKE-ST Multi | NumPy unrestricted | 0.865517 | 1.059 | 1 | 0.010586 | 0.994245 |
+| MQuAKE-ST Multi | Beam-100 | 0.977011 | 56.526 | 56 | 0.565264 | 0.910050 |
+
+Top-2/Top-4/NumPy produce little terminal diversity on Kinship (1.158/1.257/1.327 unique terminals on average) and almost none on MQuAKE (at most 1.030 Single and 1.059 Multi). MetaQA is more responsive, rising from 1.849 to 3.329 across the stochastic supports. Beam produces substantially more actual terminal diversity: 9.109 Kinship, 57.978 MetaQA, 52.735 Single, and 56.526 Multi, with corresponding coverage 1.000000, 0.999130, 0.994016, and 0.977011.
+
+Across these decoder families, greater measured diversity accompanies greater coverage. Coverage explains the direction of most beam MRR gains, but diversity alone is not sufficient to determine ranking quality: beam's MRR conditional on coverage is lower than the stochastic alternatives on all four datasets. This is a diagnostic association, not a causal identification.
+
+### 13.6 Deterministic beam versus stochastic execution
+
+#### Kinship
+
+The full 101-question result is mixed (Case C). Beam-100 has Hits@1 `0.960396`, MRR `0.977723`, complete candidate coverage, conditional MRR `0.977723`, and mean/median terminal diversity `9.109/10`. It exceeds Top-2 and NumPy MRR by `0.002475`, but falls below Top-4 by `0.002475`; Top-4 also has one additional Hits@1 question. Beam's higher coverage than Top-4 (`+0.009901`) is offset by lower conditional ranking (`−0.012277`).
+
+The earlier 64-question smoke suggested beam might be the best ranked decoder (`MRR=0.980469`). The full result confirms that beam is competitive and much more diverse, but overturns the stronger smoke impression that it leads all modes: full-data Top-4 is slightly better. Historical seed-42 stochastic values are reproduced exactly, and the earlier five-seed variation still counsels against overinterpreting one-question Kinship differences.
+
+#### MetaQA
+
+Beam-100 has Hits@1 `0.897782`, MRR `0.942106`, candidate coverage `0.999130`, conditional MRR `0.942926`, mean/median unique terminals `57.978/63`, and unique fraction `0.579776`. It exceeds NumPy MRR by `0.011965`, Top-4 by `0.012134`, and Top-2 by `0.014026`, while matching Top-2/NumPy Hits@1 and trailing greedy by five of 39,093 questions.
+
+Relative to NumPy, beam gains `0.032231` coverage but loses `0.019057` conditional MRR, so its net ranking advantage is primarily candidate exposure rather than better ordering once an answer is present. The derived quantity
+
+```text
+rho_beam = (MRR_beam - MRR_greedy) / (MRR_numpy - MRR_greedy) = 1.371233
+```
+
+means beam obtains 137.1% of the seed-42 NumPy-over-greedy MRR gain. This ratio is derived here, not emitted by the evaluator. Thus deterministic Beam-100 more than recovers the previously observed MetaQA stochastic MRR gain with zero incremental stochastic-realization payload under the shared-side-information accounting.
+
+#### MQuAKE-ST Single
+
+Beam-100 preserves the common Hits@1 `0.886303` but reaches MRR `0.922135`, versus `0.888298` for every stochastic mode (`+0.033837`). Coverage rises from `0.890293` to `0.994016`, while conditional MRR falls from `0.997760` to `0.927686`; mean unique terminals rise from about `1.03` to `52.735`. This is a strong coverage-driven beam advantage (Case A with a coverage/ranking tradeoff), not evidence for stochastic realization.
+
+#### MQuAKE-ST Multi
+
+Beam-100 preserves the common Hits@1 `0.856322` and reaches MRR `0.889130`, versus `0.860536` for every stochastic mode (`+0.028593`). Coverage rises from `0.865517` to `0.977011`, conditional MRR falls from `0.994245` to `0.910050`, and mean unique terminals rise from about `1.06` to `56.526`. This is again a coverage-driven deterministic-beam advantage (Case A with a coverage/ranking tradeoff).
+
+### 13.7 Uniform NumPy unrestricted reference
+
+The new primary campaign supplies a uniform NumPy unrestricted `R=100` reference. The preserved historical TensorFlow rows remain valid regression references.
+
+| Dataset | Metric | Historical TF | New NumPy | NumPy − TF |
+|---|---|---:|---:|---:|
+| MQuAKE-ST Single | Hits@1 | 0.886303 | 0.886303 | 0.000000 |
+| MQuAKE-ST Single | MRR | 0.888852 | 0.888298 | −0.000554 |
+| MQuAKE-ST Single | Rollout success | 0.885339 | 0.885246 | −0.000093 |
+| MQuAKE-ST Single | Full-support fixed-rank bits/q | 2115.299 | 2115.297 | −0.002 |
+| MQuAKE-ST Multi | Hits@1 | 0.856322 | 0.856322 | 0.000000 |
+| MQuAKE-ST Multi | MRR | 0.860153 | 0.860536 | +0.000383 |
+| MQuAKE-ST Multi | Rollout success | 0.854897 | 0.854805 | −0.000092 |
+| MQuAKE-ST Multi | Full-support fixed-rank bits/q | 2202.123 | 2201.977 | −0.146 |
+
+The backend change leaves Hits@1 identical and changes MRR/rollout success by less than `0.0006`; the full-support fixed-rank reference is also effectively unchanged. It does not alter the previous MQuAKE conclusion of a near-deterministic stochastic policy and small stochastic ranking gains. Backend-specific sampled surprisal/Shannon diagnostics need not match because the action draws differ.
+
+### 13.8 MQuAKE cap-200 versus cap-512 sensitivity
+
+Values are cap 200 → cap 512. Truncation is measured over the states/slots visited by each decoder, so beam and stochastic truncation fractions can differ at cap 200.
+
+| Dataset | Mode | Hits@1 | MRR | Coverage | MRR given coverage | Mean unique | Rollout success | Truncation |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| MQuAKE-ST Single | Greedy | 0.886303→0.888963 | 0.886303→0.888963 | 0.886303→0.888963 | 1.000000→1.000000 | 1.000→1.000 | 0.886303→0.888963 | 5.170%→0.000% |
+| MQuAKE-ST Single | Top-2 | 0.886303→0.888963 | 0.888298→0.891290 | 0.890293→0.893617 | 0.997760→0.997396 | 1.027→1.027 | 0.885246→0.887819 | 5.147%→0.000% |
+| MQuAKE-ST Single | Top-4 | 0.886303→0.888963 | 0.888298→0.891290 | 0.890293→0.893617 | 0.997760→0.997396 | 1.030→1.031 | 0.885246→0.887819 | 5.147%→0.000% |
+| MQuAKE-ST Single | NumPy unrestricted | 0.886303→0.888963 | 0.888298→0.891290 | 0.890293→0.893617 | 0.997760→0.997396 | 1.030→1.031 | 0.885246→0.887819 | 5.147%→0.000% |
+| MQuAKE-ST Single | Beam-100 | 0.886303→0.888963 | 0.922135→0.926025 | 0.994016→0.996676 | 0.927686→0.929114 | 52.735→51.549 | 0.139621→0.151489 | 9.352%→0.000% |
+| MQuAKE-ST Multi | Greedy | 0.856322→0.840230 | 0.856322→0.840230 | 0.856322→0.840230 | 1.000000→1.000000 | 1.000→1.000 | 0.856322→0.840230 | 18.391%→0.000% |
+| MQuAKE-ST Multi | Top-2 | 0.856322→0.840230 | 0.860536→0.848467 | 0.865517→0.857471 | 0.994245→0.989500 | 1.055→1.062 | 0.854793→0.839966 | 18.377%→0.000% |
+| MQuAKE-ST Multi | Top-4 | 0.856322→0.840230 | 0.860536→0.848467 | 0.865517→0.857471 | 0.994245→0.989500 | 1.059→1.068 | 0.854805→0.839943 | 18.377%→0.000% |
+| MQuAKE-ST Multi | NumPy unrestricted | 0.856322→0.840230 | 0.860536→0.848467 | 0.865517→0.857471 | 0.994245→0.989500 | 1.059→1.068 | 0.854805→0.839943 | 18.377%→0.000% |
+| MQuAKE-ST Multi | Beam-100 | 0.856322→0.840230 | 0.889130→0.879428 | 0.977011→0.979310 | 0.910050→0.898007 | 56.526→50.225 | 0.163391→0.227828 | 16.570%→0.000% |
+
+| Dataset | Mode | Fixed/stochastic payload 200→512 (bits/q) | Effective beam width |
+|---|---|---:|---:|
+| MQuAKE-ST Single | Greedy | 0.000→0.000 | — |
+| MQuAKE-ST Single | Top-2 | 399.801→400.000 | — |
+| MQuAKE-ST Single | Top-4 | 799.269→799.668 | — |
+| MQuAKE-ST Single | NumPy unrestricted | 2115.297→2125.943 | — |
+| MQuAKE-ST Single | Beam-100 | NA fixed-rank; 0 stochastic → NA fixed-rank; 0 stochastic | 100→100 |
+| MQuAKE-ST Multi | Greedy | 0.000→0.000 | — |
+| MQuAKE-ST Multi | Top-2 | 399.744→399.744 | — |
+| MQuAKE-ST Multi | Top-4 | 797.637→797.637 | — |
+| MQuAKE-ST Multi | NumPy unrestricted | 2201.977→2260.137 | — |
+| MQuAKE-ST Multi | Beam-100 | NA fixed-rank; 0 stochastic → NA fixed-rank; 0 stochastic | 100→100 |
+
+1. **Beam performance:** removing truncation changes Single modestly: beam Hits@1 gains four questions (`+0.002660`), MRR rises `+0.003890`, and coverage rises `+0.002660`. Multi remains materially cap-sensitive: beam Hits@1 loses 14 questions (`−0.016092`), MRR falls `−0.009702`, mean diversity falls by `6.301`, and conditional MRR falls `−0.012043`, despite coverage increasing `+0.002299`.
+2. **Stochastic performance:** Single Top-2/Top-4/NumPy MRR rises `+0.002992`, while Multi stochastic MRR falls `−0.012069` and Hits@1 falls the same 14 questions as greedy/beam. These are common cap-induced baseline changes, not newly revealed stochastic gains.
+3. **Ordering:** cap 512 does not change the decoder ordering relevant to the reviewer question. Beam remains substantially above all stochastic modes in MRR on both splits.
+4. **Stochastic advantage:** none appears. The beam-minus-stochastic MRR gap is about `+0.033837` at cap 200 and `+0.034735` at cap 512 for Single; it is `+0.028593` and `+0.030960` for Multi.
+5. **Relative cap sensitivity:** Multi remains more cap-sensitive in absolute task performance. Its unusual response confirms that cap 512 is only an evaluation sensitivity of a checkpoint trained under cap 200; it is not automatically a better inference condition.
+
+### 13.9 Communication interpretation
+
+Greedy and deterministic beam both have zero incremental stochastic action-realization payload under synchronized policy, state, local action interface/order, and tie-breaking. Top-2/Top-4 values are fixed-rank sampled-action payloads summed over all 100 trajectories and hops. NumPy is the full-support stochastic local-rank reference. Beam fixed-rank/source-code fields remain null because deterministic branch retention is not a sequence of sampled action messages.
+
+Beam nevertheless incurs additional computation, beam-state maintenance, candidate processing, and stringent synchronization assumptions. Those costs were not measured and lie outside this conditional action-message accounting. The present experiment therefore compares ranking utility against stochastic action payload, not total system cost or equal compute.
+
+### 13.10 Scientific conclusion and reviewer hypothesis
+
+The strict four-dataset result is **mixed (Case C), but it strongly supports the reviewer hypothesis**. Deterministic beam exceeds every stochastic mode in MRR on MetaQA and both MQuAKE splits; on Kinship it exceeds Top-2 and NumPy but trails Top-4 by only `0.002475`. Thus stochastic action realization is not uniquely responsible for the sampled-candidate ranking gains. Much—and on three datasets more than all—of the stochastic MRR improvement is obtainable through deterministic diverse decoding with zero incremental stochastic-realization messages under the tested shared-side-information assumptions.
+
+The decomposition is consistent across datasets: beam exposes many more terminal entities and substantially raises answer coverage, while ranking answers worse conditional on coverage. Beam wins overall when its coverage gain outweighs that conditional-ranking loss. Kinship Top-4 is the one case where the conditional-ranking tradeoff slightly favors stochastic decoding. These diagnostics support a candidate-exposure explanation within the tested decoders, but do not establish causality or optimality of beam search.
+
+### 13.11 High-level implications for future paper revision
+
+- The prior claim that stochastic branching itself supplies the `R=100` ranking utility is stale and must be qualified. The evidence now supports **diverse decoding**, not stochastic realization specifically, as the central mechanism.
+- A unique communication benefit from stochastic branching cannot be claimed from these results. Within the stochastic family, Top-2/Top-4 still reduce action payload relative to NumPy for similar ranking utility, but deterministic beam often delivers greater MRR with zero stochastic-realization payload at a different and unmeasured computational cost.
+- The scientifically supported framing is a communication/computation/candidate-diversity tradeoff: greedy is cheap and top-1 competitive; stochastic Top-K offers controlled sampled branching; deterministic beam offers much broader candidate exposure without stochastic action messages but with higher search/state-processing cost.
+- The historical observation that candidate diversity was only a plausible, unmeasured explanation is now superseded: terminal diversity, answer coverage, and conditional ranking are measured directly. The historical final verdict that no additional core experiment was needed was superseded by Section 12 and is now empirically resolved by this section.
+
+### 13.12 Remaining limitations
+
+- The primary stochastic comparison is seed 42. Kinship and MetaQA seed-42 stochastic values exactly reproduce their existing five-seed campaign rows, but the new beam comparison itself is not a five-seed study. Beam is deterministic under fixed execution state/tie behavior.
+- `R=100` MRR remains MINERVA sampled-candidate MAX-pool MRR, not full-KG entity-ranking MRR.
+- Beam width 100 is 100 retained slots, not 100 unique valid paths; actual unique fractions range from `0.091089` to `0.579776`.
+- Decoder compute, memory, latency, candidate-processing, and synchronization-establishment costs are not measured or matched.
+- Cap-200 truncation is decoder-state dependent; MetaQA remains truncated, and MQuAKE cap 512 is evaluation-only.
+- Zero stochastic payload is conditional on identical policy/state/local-interface/order/tie-breaking and is not zero total communication.
+- No new multi-seed experiment is required to establish beam determinism or the primary coverage/ranking decomposition, but the single-seed stochastic rows should not be described as new multi-seed evidence.
